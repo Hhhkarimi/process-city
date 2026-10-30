@@ -407,8 +407,8 @@ export class Experience {
       captionElement.textContent =
         caption ||
         this.t(
-          "Drag to explore · select a building",
-          "برای کاوش بکش؛ یک ساختمان را انتخاب کن",
+          "Select a building to trace its parent and children",
+          "یک ساختمان را انتخاب کن؛ مسیر والد و فرزندانش روشن می‌شود",
         );
     this.c
       .scene()

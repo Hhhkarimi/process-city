@@ -20,6 +20,7 @@ import {
 import type { ApplicationInsight } from "./insights.ts";
 import { Experience } from "./experience.ts";
 import { architectures, classify } from "./districts.ts";
+import { processRelations } from "./relationships.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 let fa = new URLSearchParams(location.search).get("lang") === "fa";
@@ -257,6 +258,7 @@ function renderShell(): void {
         inspectorOpen = true;
         insightOpen = false;
         renderPanels(true);
+        document.getElementById("inspector")!.scrollTop = 0;
       },
     );
   } catch (e) {
@@ -297,23 +299,28 @@ function sparkline(process: CityProcess): string {
     .join(" ");
   return `<svg class="sparkline" viewBox="0 0 280 80" role="img" aria-label="${t("Private memory history, up to 30 samples", "تاریخچهٔ حافظهٔ خصوصی تا ۳۰ نمونه")}"><path d="M10 67H270M10 30H270" class="chart-grid"/><polyline points="${points}" class="chart-line"/></svg>`;
 }
+function relationshipMarkup(p: CityProcess): string {
+  const family = processRelations(snapshot!.processes, p.key);
+  const item = (member: CityProcess, role: string, kind: string) =>
+    `<button class="family-node ${kind}" data-process="${esc(member.key)}"><small>${role}</small><span dir="ltr">${esc(member.name)}</span><bdi>PID ${member.pid}</bdi></button>`;
+  return `<section class="family-map" aria-label="${t("Observed process relationships", "روابط مشاهده‌شدهٔ پردازش")}"><div class="family-map-title"><h3>${t("Follow this family", "مسیر این خانواده")}</h3><span>${num(family.children.length)} ${t("children", "فرزند")}</span></div><p>${t("Arrows go from parent to child; they do not show data or network traffic.", "پیکان از والد به فرزند است؛ جریان داده یا شبکه را نشان نمی‌دهد.")}</p>${family.parent ? item(family.parent, t("PARENT · AMBER", "والد · طلایی"), "parent-node") : `<div class="family-missing">${t("Parent unavailable or exited", "والد در دسترس نیست یا پایان یافته")}${p.ppid ? ` · PPID <bdi>${p.ppid}</bdi>` : ""}</div>`}<div class="family-direction" aria-hidden="true">↓</div><div class="family-current"><span>${t("SELECTED", "انتخاب‌شده")}</span><bdi>${esc(p.name)} · ${p.pid}</bdi></div>${
+    family.children.length
+      ? `<div class="family-direction" aria-hidden="true">↓</div><div class="family-children">${family.children
+          .slice(0, 2)
+          .map((child) =>
+            item(child, t("CHILD · BLUE", "فرزند · آبی"), "child-node"),
+          )
+          .join("")}</div>`
+      : `<p class="family-empty">${t("No observed children in this snapshot.", "در این نمونه فرزندی مشاهده نشده است.")}</p>`
+  }${family.children.length > 2 ? `<button class="text-button" data-action="children">${t("All children", "همهٔ فرزندان")} (${num(family.children.length)}) ↗</button>` : ""}${family.children.length > 12 ? `<p>${t("The city highlights the 12 largest children; the list includes all of them.", "برای خوانایی، ۱۲ فرزند با بیشترین حافظه در شهر برجسته‌اند؛ فهرست شامل همه است.")}</p>` : ""}${!roads ? `<button class="text-button" data-action="relations">${t("Show the paths in the city", "نمایش مسیرها در شهر")} ↗</button>` : ""}</section>`;
+}
 function inspectorMarkup(): string {
   const p = snapshot?.processes.find((p) => p.key === selected);
   if (!p)
     return `<div class="inspector-header">${icon("search")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span></div><div class="inspector-empty">${icon("city")}<h2>${selected ? t("This process has left the city.", "این پردازش از شهر خارج شده است.") : t("Meet a building.", "با یک ساختمان آشنا شو.")}</h2><p>${t("Select any building or process in the list to follow its story.", "یک ساختمان یا پردازش از فهرست انتخاب کنید تا جزئیاتش را ببینید.")}</p></div>`;
-  const parent = snapshot!.processes.find((v) => v.key === p.parentKey),
-    children = snapshot!.processes.filter((v) => v.parentKey === p.key);
-  return `<div class="inspector-header">${icon("cpu")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span><span class="inspector-live">${experience.replaying ? t("REPLAY", "بازپخش") : paused ? t("PAUSED", "متوقف") : t("TRACKING", "در حال رصد")}</span></div><div class="inspector-content"><div class="process-avatar">${icon("city")}</div><h2 dir="ltr">${esc(p.name)}</h2><div class="architecture-badge">${fa ? architectures[classify(p.name)].fa : architectures[classify(p.name)].en}</div><button data-exp="enter" class="enter-building">↗ ${t("Enter this building", "ورود به این ساختمان")}</button><div class="pid-line">PID <bdi>${p.pid}</bdi> <span>·</span> PPID <bdi>${p.ppid}</bdi></div><div class="inspector-metrics"><div><span>${t("CPU SHARE", "سهم CPU")}</span><strong>${percent(p.cpu)}</strong></div><div><span>${t("WORKING SET", "حافظهٔ مقیم")}</span><strong><bdi>${size(p.rssBytes)}</bdi></strong></div></div><div class="inspector-separator"></div><div class="history-heading"><h3>${t("Private memory", "حافظهٔ خصوصی")}</h3><span>${num(p.history.length)} ${t("samples", "نمونه")}</span></div><div class="history-value"><bdi>${size(p.privateBytes)}</bdi><span class="${p.growing ? "warning-text" : ""}">${p.growthMB >= 0 ? "+" : "−"}${num(Math.abs(p.growthMB), 1)} MB</span></div>${sparkline(p)}<div class="chart-axis"><span>${t("Earlier", "قبل‌تر")}</span><span>${t("Now", "اکنون")}</span></div>
+  return `<div class="inspector-header">${icon("cpu")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span><span class="inspector-live">${experience.replaying ? t("REPLAY", "بازپخش") : paused ? t("PAUSED", "متوقف") : t("TRACKING", "در حال رصد")}</span></div><div class="inspector-content"><div class="process-avatar">${icon("city")}</div><h2 dir="ltr">${esc(p.name)}</h2><div class="pid-line">PID <bdi>${p.pid}</bdi> <span>·</span> PPID <bdi>${p.ppid}</bdi></div>${relationshipMarkup(p)}<div class="architecture-badge">${fa ? architectures[classify(p.name)].fa : architectures[classify(p.name)].en}</div><button data-exp="enter" class="enter-building">↗ ${t("Enter this building", "ورود به این ساختمان")}</button><div class="inspector-metrics"><div><span>${t("CPU SHARE", "سهم CPU")}</span><strong>${percent(p.cpu)}</strong></div><div><span>${t("WORKING SET", "حافظهٔ مقیم")}</span><strong><bdi>${size(p.rssBytes)}</bdi></strong></div></div><div class="inspector-separator"></div><div class="history-heading"><h3>${t("Private memory", "حافظهٔ خصوصی")}</h3><span>${num(p.history.length)} ${t("samples", "نمونه")}</span></div><div class="history-value"><bdi>${size(p.privateBytes)}</bdi><span class="${p.growing ? "warning-text" : ""}">${p.growthMB >= 0 ? "+" : "−"}${num(Math.abs(p.growthMB), 1)} MB</span></div>${sparkline(p)}<div class="chart-axis"><span>${t("Earlier", "قبل‌تر")}</span><span>${t("Now", "اکنون")}</span></div>
   ${p.growing ? `<div class="growth-alert">${icon("drop")}<div><strong>${t("Sustained memory growth", "رشد پیوستهٔ حافظه")}</strong><p>+${num(p.growthRate, 1)} MB/min · ${t("Possible leak; inspect further.", "احتمال نشت؛ نیازمند بررسی بیشتر.")}</p></div></div>` : `<div class="stable-note"><span class="status-dot"></span>${t("No sustained growth signal", "نشانه‌ای از رشد پیوسته دیده نشد")}</div>`}
-  <div class="inspector-separator"></div><h3 class="relationship-title">${icon("link")}${t("Connected streets", "خیابان‌های متصل")}</h3><div class="relation-label">${t("PARENT", "والد")}</div>${parent ? `<button class="relation" data-process="${esc(parent.key)}"><span dir="ltr">${esc(parent.name)}</span><span>${parent.pid}</span>${icon("arrow")}</button>` : `<p class="muted-note">${t("Parent is unavailable or has exited.", "والد در دسترس نیست یا پایان یافته است.")}</p>`}<div class="relation-label children-label">${t("CHILDREN", "فرزندان")} <span>${num(children.length)}</span></div>${children
-    .slice(0, 6)
-    .map(
-      (child) =>
-        `<button class="relation" data-process="${esc(child.key)}"><span dir="ltr">${esc(child.name)}</span><span>${child.pid}</span>${icon("arrow")}</button>`,
-    )
-    .join(
-      "",
-    )}${children.length > 6 ? `<button class="text-button" data-action="children">${t("Show all children in list", "نمایش همهٔ فرزندان در فهرست")}</button>` : ""}<div class="process-age">${t("Started", "زمان آغاز")}: ${p.createdAt ? esc(new Date(p.createdAt).toLocaleTimeString(fa ? "fa-IR" : "en-GB")) : t("Unavailable", "نامشخص")}</div></div>`;
+  <div class="process-age">${t("Started", "زمان آغاز")}: ${p.createdAt ? esc(new Date(p.createdAt).toLocaleTimeString(fa ? "fa-IR" : "en-GB")) : t("Unavailable", "نامشخص")}</div></div>`;
 }
 function renderPanels(force = false): void {
   document
@@ -323,6 +330,10 @@ function renderPanels(force = false): void {
     '[data-action="discover"]',
   );
   if (discoverButton) discoverButton.disabled = !snapshot;
+  const relationsButton = document.getElementById(
+    "relations-open",
+  ) as HTMLButtonElement | null;
+  if (relationsButton) relationsButton.disabled = !snapshot;
   if (!snapshot) {
     const banner = document.querySelector<HTMLElement>("#connection-banner");
     if (banner) {
@@ -446,6 +457,16 @@ function renderPanels(force = false): void {
       )
       ?.focus({ preventScroll: true });
   byId("inspector").hidden = !inspectorOpen;
+  const familyLegend = byId("relationship-legend");
+  familyLegend.hidden = !(
+    inspectorOpen &&
+    roads &&
+    snapshot.processes.some((p) => p.key === selected)
+  );
+  byId("relations-open").setAttribute(
+    "aria-pressed",
+    String(inspectorOpen && roads),
+  );
   byId("insight").hidden = !insightOpen;
   const discovery = insightOpen
     ? insightKey
@@ -490,6 +511,7 @@ function renderPanels(force = false): void {
         : null,
     locale: fa ? "fa" : "en",
     mode: experience.source(),
+    relationFocus: inspectorOpen,
   });
 }
 function accept(raw: RawSnapshot): void {
@@ -621,6 +643,7 @@ app.addEventListener("click", async (event) => {
     insightOpen = false;
     document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
     renderPanels(true);
+    document.getElementById("inspector")!.scrollTop = 0;
     document
       .querySelector<HTMLButtonElement>(".inspector-close")
       ?.focus({ preventScroll: true });
@@ -709,7 +732,42 @@ app.addEventListener("click", async (event) => {
         insightOpen = false;
         inspectorOpen = true;
         renderPanels(true);
+        document.getElementById("inspector")!.scrollTop = 0;
       }
+      break;
+    }
+    case "relations": {
+      if (!snapshot) break;
+      if (inspectorOpen && roads && target.id === "relations-open") {
+        inspectorOpen = false;
+        renderPanels();
+        break;
+      }
+      experience.stopDirector();
+      finishIntro();
+      if (
+        !inspectorOpen ||
+        !snapshot.processes.some((p) => p.key === selected)
+      ) {
+        const counts = new Map<string, number>();
+        snapshot.processes.forEach((p) => {
+          if (p.parentKey)
+            counts.set(p.parentKey, (counts.get(p.parentKey) ?? 0) + 1);
+        });
+        selected =
+          [...snapshot.processes].sort(
+            (a, b) =>
+              (counts.get(b.key) ?? 0) - (counts.get(a.key) ?? 0) ||
+              b.rssBytes - a.rssBytes,
+          )[0]?.key ?? null;
+      }
+      roads = true;
+      inspectorOpen = true;
+      insightOpen = false;
+      query = "";
+      parentFilter = null;
+      filter = "all";
+      renderPanels(true);
       break;
     }
     case "close-inspector":

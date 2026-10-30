@@ -80,6 +80,7 @@ The development server opens at `http://127.0.0.1:5174`. Its `/api` proxy connec
 - Search by process name or PID. Sort by memory, CPU or name. Filter processes with sustained private-memory growth.
 - In 3D, drag to orbit, Shift-drag to pan, +/− to zoom and 0/Escape to reset. Arrow keys orbit a focused canvas. The 2D fallback uses drag/arrow panning.
 - Toggle process labels and parent-child streets. The searchable process list includes all collected processes; the map is limited to 110 buildings for predictable rendering cost.
+- Select a building or press **Relationships** to trace its observed family. Amber arrows lead from its parent; blue arrows lead to its children. Roof labels include roles and PIDs, and the inspector's family diagram is navigable. The city highlights up to 12 children for clarity; **All children** opens the complete list. Paths are ancestry, not network traffic.
 - Pause freezes sampling and animation; resume reads the current counters again.
 - Capture & replay contains the source-marked PNG, video, recording and raw-snapshot exports.
 - Persian and English UI, bundled Vazirmatn font, reduced-motion support and an accessible process list alongside the visual canvas.

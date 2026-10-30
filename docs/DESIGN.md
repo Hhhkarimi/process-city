@@ -45,3 +45,10 @@ PNG and video exports include source and sample time. Video uses a fixed copy of
 ## Verification
 
 Check default, loading, unavailable CPU, stale collector, selected/exited process, empty filter, recording replay, invalid import, active rescue, encoding, cancellation and unsupported encoder states. Use real browser checks at 320, 375, 414, 768 and desktop widths, including keyboard navigation and console output. Commit only synthetic screenshots and fixtures.
+## Reading process relationships
+
+Ground streets use half-grid lanes and short driveways, so they do not run through intermediate building footprints. Selecting a process reveals its observed parent in amber and direct children in blue, with arrows from parent to child. Roof rings, role/name/PID labels and a navigable family diagram provide redundant cues beyond color. These links are process ancestry, not network traffic or data flow.
+
+The bounded skyline always admits the selected process, its available parent and its 12 largest children before filling remaining plots by working-set memory. At most 12 child paths are emphasized to avoid a dense graph; the inspector discloses this limit and offers the complete child list. Missing parents and childless processes are explicit states. Resource-discovery mode keeps its application-family view, independent of the relationship focus.
+
+Relation labels keep a readable screen size, avoid each other and have leader lines back to their roofs. Mobile uses fewer labels and a lower details sheet. Canvas fallback preserves the same semantic direction, colors and relation navigation.

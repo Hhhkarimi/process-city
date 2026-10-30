@@ -4,6 +4,11 @@ import type { CityProcess, CitySnapshot, Theme } from "./model.ts";
 import type { CityOptions } from "./city2d.ts";
 import { architectures, classify } from "./districts.ts";
 import { CityLayout, hash, type Plot } from "./layout.ts";
+import {
+  processRelations,
+  relationColors,
+  streetRoute,
+} from "./relationships.ts";
 
 export type Quality = "auto" | "low" | "high";
 export interface SceneView {
@@ -59,6 +64,8 @@ export class WebGLCityScene {
   private buildings: Building[] = [];
   private marks: WindowMark[] = [];
   private streets = new THREE.Group();
+  private connections = new THREE.Group();
+  private relatives = new Set<string>();
   private ground: THREE.Mesh;
   private water: THREE.Mesh;
   private ripples: THREE.Mesh[] = [];
@@ -228,6 +235,7 @@ export class WebGLCityScene {
       this.windows,
       this.roofs,
       this.streets,
+      this.connections,
       this.labels,
       this.particles,
     );
@@ -447,6 +455,8 @@ export class WebGLCityScene {
       options.selected !== this.options.selected ||
       options.labels !== this.options.labels ||
       options.roads !== this.options.roads ||
+      options.relationFocus !== this.options.relationFocus ||
+      options.locale !== this.options.locale ||
       options.filter !== this.options.filter;
     this.snapshot = snapshot;
     this.options = options;
@@ -486,7 +496,12 @@ export class WebGLCityScene {
         .slice(-245);
       this.clearGroup(this.roofs);
       this.clearGroup(this.streets);
+      this.clearGroup(this.connections);
       this.clearGroup(this.labels);
+      this.relatives =
+        options.roads && options.relationFocus
+          ? processRelations(snapshot.processes, options.selected).highlighted
+          : new Set();
       this.buildings = [...this.layout.plots].map(([key, plot], index) => {
         const process = byKey.get(key)!;
         const building: Building = {
@@ -512,6 +527,10 @@ export class WebGLCityScene {
       });
       this.bodies.count = this.buildings.length;
       this.marks = [];
+      const roadBatches = new Map<
+        string,
+        { opacity: number; segments: { a: Plot; d: Plot }[] }
+      >();
       for (const b of this.buildings) {
         const floors = Math.floor(b.height / 0.29),
           color = architectures[classify(b.process.name)].color;
@@ -541,39 +560,66 @@ export class WebGLCityScene {
         const p = b.process,
           parent = p.parentKey ? this.layout.plots.get(p.parentKey) : undefined;
         if (parent && options.roads) {
-          const points = [
-            new THREE.Vector3(
-              (b.plot.x - 6) * 1.3,
-              0.035,
-              (b.plot.z - 6) * 1.3,
-            ),
-            new THREE.Vector3(
-              (parent.x - 6) * 1.3,
-              0.035,
-              (b.plot.z - 6) * 1.3,
-            ),
-            new THREE.Vector3(
-              (parent.x - 6) * 1.3,
-              0.035,
-              (parent.z - 6) * 1.3,
-            ),
-          ];
           const active =
-            p.key === options.selected || p.parentKey === options.selected;
-          this.streets.add(
-            new THREE.Line(
-              new THREE.BufferGeometry().setFromPoints(points),
-              new THREE.LineBasicMaterial({
-                color: active ? theme.secondary : theme.accent,
-                transparent: true,
-                opacity: active ? 0.9 : 0.12,
-              }),
-            ),
-          );
+            options.relationFocus &&
+            (p.key === options.selected ||
+              (p.parentKey === options.selected && this.relatives.has(p.key)));
+          const color = active
+            ? p.key === options.selected
+              ? relationColors.parent
+              : relationColors.child
+            : "#688d9e";
+          const points = streetRoute(parent, b.plot);
+          for (let i = 1; i < points.length; i++) {
+            const a = points[i - 1],
+              d = points[i];
+            const batch = roadBatches.get(color) ?? {
+              opacity: active ? 0.95 : options.relationFocus ? 0.12 : 0.6,
+              segments: [],
+            };
+            batch.segments.push({ a, d });
+            roadBatches.set(color, batch);
+          }
         }
-        if (p.key === options.selected || (options.labels && b.index < 24))
+        if (
+          (!(options.roads && options.relationFocus) &&
+            p.key === options.selected) ||
+          (options.labels && !this.relatives.has(p.key) && b.index < 24)
+        )
           this.labels.add(this.label(p.name, color, b));
       }
+      // Ground streets use at most three draw calls, regardless of process count.
+      for (const [color, batch] of roadBatches) {
+        const mesh = new THREE.InstancedMesh(
+          new THREE.BoxGeometry(1, 1, 1),
+          new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: batch.opacity,
+            depthWrite: false,
+          }),
+          batch.segments.length,
+        );
+        batch.segments.forEach(({ a, d }, index) => {
+          const length = Math.hypot(a.x - d.x, a.z - d.z) * 1.3;
+          this.dummy.position.set(
+            ((a.x + d.x) / 2 - 6) * 1.3,
+            0.055,
+            ((a.z + d.z) / 2 - 6) * 1.3,
+          );
+          this.dummy.rotation.set(0, 0, 0);
+          this.dummy.scale.set(
+            a.x === d.x ? 0.09 : length,
+            0.012,
+            a.x === d.x ? length : 0.09,
+          );
+          this.dummy.updateMatrix();
+          mesh.setMatrixAt(index, this.dummy.matrix);
+        });
+        mesh.frustumCulled = false;
+        this.streets.add(mesh);
+      }
+      if (options.roads && options.relationFocus) this.addConnections();
       this.windows.count = Math.min(this.marks.length, 14000);
       this.updateMatrices(now);
     }
@@ -582,6 +628,217 @@ export class WebGLCityScene {
       this.comparison(this.compare, this.mix);
     }
     this.renderAt(performance.now());
+  }
+  private addConnections() {
+    if (!this.snapshot) return;
+    const family = processRelations(
+      this.snapshot.processes,
+      this.options.selected,
+    );
+    if (!family.process) return;
+    const selected = this.buildings.find(
+      (b) => b.process.key === family.process!.key,
+    );
+    if (!selected) return;
+    const fa = this.options.locale === "fa";
+    const labelled = [
+      family.parent,
+      family.process,
+      ...family.children.slice(0, this.width < 700 ? 1 : 4),
+    ].filter((p) => p !== null);
+    for (const p of labelled) {
+      const b = this.buildings.find((b) => b.process.key === p.key);
+      if (!b) continue;
+      const role =
+        p.key === selected.process.key
+          ? fa
+            ? "انتخاب"
+            : "SELECTED"
+          : p.key === family.parent?.key
+            ? fa
+              ? "والد"
+              : "PARENT"
+            : fa
+              ? "فرزند"
+              : "CHILD";
+      const color =
+        p.key === selected.process.key
+          ? relationColors.selected
+          : p.key === family.parent?.key
+            ? relationColors.parent
+            : relationColors.child;
+      const marker = new THREE.Mesh(
+        new THREE.TorusGeometry(b.width * 0.7, 0.025, 6, 32),
+        new THREE.MeshBasicMaterial({
+          color,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      marker.rotation.x = -Math.PI / 2;
+      marker.position.set(
+        (b.plot.x - 6) * 1.3,
+        b.height + 0.32,
+        (b.plot.z - 6) * 1.3,
+      );
+      marker.renderOrder = 24;
+      this.connections.add(marker);
+      const label = this.label(`${role} · ${p.name} · ${p.pid}`, color, b);
+      label.renderOrder = 26;
+      label.userData.relation = true;
+      const leader = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          marker.position,
+          label.position,
+        ]),
+        new THREE.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.65,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      leader.renderOrder = 25;
+      label.userData.leader = leader;
+      this.connections.add(leader);
+      this.labels.add(label);
+    }
+    for (const child of [family.process, ...family.children.slice(0, 12)]) {
+      if (!child.parentKey) continue;
+      const a = this.buildings.find((b) => b.process.key === child.parentKey),
+        b = this.buildings.find((b) => b.process.key === child.key);
+      if (!a || !b) continue;
+      const color =
+        child.key === family.process.key
+          ? relationColors.parent
+          : relationColors.child;
+      const from = new THREE.Vector3(
+        (a.plot.x - 6) * 1.3,
+        a.height + 0.3,
+        (a.plot.z - 6) * 1.3,
+      );
+      const to = new THREE.Vector3(
+        (b.plot.x - 6) * 1.3,
+        b.height + 0.3,
+        (b.plot.z - 6) * 1.3,
+      );
+      const middle = from.clone().lerp(to, 0.5);
+      middle.y =
+        Math.max(from.y, to.y) + Math.min(3, from.distanceTo(to) * 0.35 + 0.6);
+      const curve = new THREE.QuadraticBezierCurve3(from, middle, to);
+      const tube = new THREE.Mesh(
+        new THREE.TubeGeometry(curve, 28, 0.05, 4, false),
+        new THREE.MeshBasicMaterial({
+          color,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.95,
+          toneMapped: false,
+        }),
+      );
+      tube.renderOrder = 22;
+      this.connections.add(tube);
+      const arrow = new THREE.Mesh(
+        new THREE.ConeGeometry(0.16, 0.45, 6),
+        new THREE.MeshBasicMaterial({
+          color,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      arrow.position.copy(curve.getPoint(0.72));
+      arrow.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        curve.getTangent(0.72).normalize(),
+      );
+      arrow.renderOrder = 23;
+      this.connections.add(arrow);
+    }
+  }
+  private arrangeRelationLabels() {
+    const occupied: { x: number; y: number }[] = [];
+    for (const object of this.labels.children) {
+      if (!(object instanceof THREE.Sprite) || !object.userData.relation)
+        continue;
+      const b = object.userData.building as Building;
+      const anchor = new THREE.Vector3(
+        (b.plot.x - 6) * 1.3,
+        b.height + 0.35,
+        (b.plot.z - 6) * 1.3,
+      );
+      const projected = anchor.clone().project(this.camera);
+      const labelWidth = Math.min(
+          this.width < 600 ? 142 : 188,
+          this.width - 24,
+        ),
+        labelHeight = 25;
+      let x = ((projected.x + 1) * this.width) / 2;
+      let y = ((1 - projected.y) * this.height) / 2 - 26;
+      const minimumX =
+        !this.fixed && this.width > 700 && this.options.locale === "fa"
+          ? 330 + labelWidth / 2
+          : labelWidth / 2 + 12;
+      const maximumX =
+        !this.fixed && this.width > 700 && this.options.locale !== "fa"
+          ? this.width - 330 - labelWidth / 2
+          : this.width - labelWidth / 2 - 12;
+      x = clamp(x, Math.min(minimumX, maximumX), maximumX);
+      const maximumY =
+        !this.fixed && this.width < 700
+          ? this.height * 0.52 - 55
+          : this.height - 55;
+      y = clamp(y, 28, Math.max(28, maximumY));
+      for (
+        let attempts = 0;
+        attempts < 12 &&
+        occupied.some(
+          (p) =>
+            Math.abs(p.x - x) < labelWidth + 8 &&
+            Math.abs(p.y - y) < labelHeight + 5,
+        );
+        attempts++
+      ) {
+        y -= labelHeight + 6;
+        if (y < 28) {
+          y = Math.max(28, maximumY);
+          x = clamp(x + labelWidth / 2, Math.min(minimumX, maximumX), maximumX);
+        }
+      }
+      occupied.push({ x, y });
+      object.position.copy(
+        new THREE.Vector3(
+          (x / this.width) * 2 - 1,
+          1 - (y / this.height) * 2,
+          projected.z,
+        ).unproject(this.camera),
+      );
+      const unitsPerPixel =
+        (2 *
+          Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) *
+          this.camera.position.distanceTo(object.position)) /
+        this.height;
+      object.scale.set(
+        labelWidth * unitsPerPixel,
+        labelHeight * unitsPerPixel,
+        1,
+      );
+      const leader = object.userData.leader as THREE.Line;
+      const positions = leader.geometry.getAttribute(
+        "position",
+      ) as THREE.BufferAttribute;
+      positions.setXYZ(0, anchor.x, anchor.y, anchor.z);
+      positions.setXYZ(
+        1,
+        object.position.x,
+        object.position.y,
+        object.position.z,
+      );
+      positions.needsUpdate = true;
+      leader.frustumCulled = false;
+    }
   }
   private addRoof(b: Building) {
     const a = architectures[classify(b.process.name)],
@@ -679,14 +936,15 @@ export class WebGLCityScene {
     const c = canvas.getContext("2d")!;
     c.fillStyle = "#0b1522e8";
     c.fillRect(0, 0, 512, 80);
-    c.font = "500 28px Vazirmatn, sans-serif";
+    c.font = "500 32px Vazirmatn, sans-serif";
     c.textAlign = "center";
     c.fillStyle = color;
-    c.fillText(name.slice(0, 28), 256, 50);
+    c.fillText(name, 256, 50, 490);
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: new THREE.CanvasTexture(canvas),
         depthTest: false,
+        depthWrite: false,
         transparent: true,
       }),
     );
@@ -711,7 +969,10 @@ export class WebGLCityScene {
           : clamp((now - b.born - (hash(b.process.key) % 350)) / 1300, 0.02, 1);
       const rise = Math.min(1 - Math.pow(1 - progress, 3), intro);
       const dim =
-          this.options.filter && !this.options.filter.has(b.process.key),
+          (this.options.filter && !this.options.filter.has(b.process.key)) ||
+          (this.options.roads &&
+            this.options.relationFocus &&
+            !this.relatives.has(b.process.key)),
         selected = b.process.key === this.options.selected;
       this.dummy.position.set(
         (b.plot.x - 6) * 1.3,
@@ -733,6 +994,17 @@ export class WebGLCityScene {
         (b.plot.z - 6) * 1.3,
       );
       b.roof.scale.setScalar(dim ? 0.85 : 1);
+      b.roof.traverse((object) => {
+        if (
+          object instanceof THREE.Mesh &&
+          object.material instanceof THREE.MeshStandardMaterial
+        ) {
+          object.material.color
+            .set(architectures[classify(b.process.name)].color)
+            .multiplyScalar(dim ? 0.25 : 1);
+          object.material.emissiveIntensity = dim ? 0.015 : 0.12;
+        }
+      });
       b.roof.visible = rise > 0.2;
     }
     this.bodies.instanceMatrix.needsUpdate = true;
@@ -760,7 +1032,10 @@ export class WebGLCityScene {
       this.dummy.updateMatrix();
       this.windows.setMatrixAt(i, this.dummy.matrix);
       const dim =
-        this.options.filter && !this.options.filter.has(b.process.key);
+        (this.options.filter && !this.options.filter.has(b.process.key)) ||
+        (this.options.roads &&
+          this.options.relationFocus &&
+          !this.relatives.has(b.process.key));
       this.color
         .set(
           mark.lit
@@ -937,7 +1212,7 @@ export class WebGLCityScene {
   }
   private defaultRadius() {
     return this.camera.aspect > 1.8
-      ? 35
+      ? 30
       : Math.min(65, 37 / Math.min(1, this.camera.aspect));
   }
   zoom(delta: number) {
@@ -1026,6 +1301,18 @@ export class WebGLCityScene {
       this.target.z + this.radius * Math.sin(this.phi) * Math.cos(this.theta),
     );
     this.camera.lookAt(this.target);
+    if (this.options.relationFocus && this.width < 700 && !this.fixed)
+      this.camera.setViewOffset(
+        this.width,
+        this.height,
+        0,
+        this.height * 0.18,
+        this.width,
+        this.height,
+      );
+    else this.camera.clearViewOffset();
+    this.camera.updateMatrixWorld();
+    this.arrangeRelationLabels();
     if (
       this.buildings.some((b) => now - b.born < 1700) ||
       now - this.introAt < 3000

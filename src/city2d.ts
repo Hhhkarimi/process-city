@@ -1,5 +1,11 @@
 import type { CityProcess, CitySnapshot, Theme } from "./model.ts";
 import { architectures, classify, districtRoot } from "./districts.ts";
+import {
+  processRelations,
+  relationColors,
+  streetRoute,
+  visibleProcesses,
+} from "./relationships.ts";
 interface Spot {
   x: number;
   y: number;
@@ -19,6 +25,7 @@ export interface CityOptions {
   filter: Set<string> | null;
   locale: "en" | "fa";
   mode: "demo" | "live";
+  relationFocus?: boolean;
 }
 const clamp = (n: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, n));
@@ -288,15 +295,14 @@ export class CanvasCityScene {
       );
   }
   private layout(processes: CityProcess[]): void {
-    const visible = new Set(processes.map((p) => p.key));
+    const priority = visibleProcesses(processes, this.options.selected);
+    const visible = new Set(priority.map((p) => p.key));
     for (const key of this.positions.keys())
       if (!visible.has(key)) this.positions.delete(key);
     const occupied = new Set(
       [...this.positions.values()].map((p) => p.y * 13 + p.x),
     );
-    for (const process of [...processes]
-      .sort((a, b) => b.rssBytes - a.rssBytes)
-      .slice(0, 110)) {
+    for (const process of priority) {
       if (this.positions.has(process.key)) continue;
       const root = districtRoot(process, processes);
       const zone = architectures[classify(root.name)].zone;
@@ -350,7 +356,13 @@ export class CanvasCityScene {
     return {
       x: this.width * 0.5 + (x - y) * 32 * scale + this.pan.x,
       y:
-        this.height * 0.57 + (x + y - 12) * 16 * scale - z * scale + this.pan.y,
+        this.height *
+          (this.width < 700 && this.options.relationFocus && !this.fixed
+            ? 0.39
+            : 0.57) +
+        (x + y - 12) * 16 * scale -
+        z * scale +
+        this.pan.y,
     };
   }
   private polygon(points: Spot[], fill: string, stroke?: string): void {
@@ -458,6 +470,7 @@ export class CanvasCityScene {
           bb = this.positions.get(b.key)!;
         return aa.x + aa.y - bb.x - bb.y;
       });
+    const family = processRelations(snapshot.processes, this.options.selected);
     const scale =
       Math.min(this.width / 910, this.height / 650) * this.zoomValue;
     if (this.ghost) {
@@ -489,18 +502,26 @@ export class CanvasCityScene {
           parent = p.parentKey ? this.positions.get(p.parentKey) : undefined;
         if (!pos || !parent) continue;
         const highlight =
-          p.key === this.options.selected ||
-          p.parentKey === this.options.selected;
-        c.globalAlpha = highlight ? 0.9 : 0.28;
-        c.strokeStyle = highlight ? t.secondary : t.road;
-        c.lineWidth = (highlight ? 2.2 : 1.4) * scale;
-        const a = this.project(pos.x + 0.3, pos.y + 0.3),
-          b = this.project(parent.x + 0.3, pos.y + 0.3),
-          d = this.project(parent.x + 0.3, parent.y + 0.3);
+          this.options.relationFocus &&
+          (p.key === this.options.selected ||
+            (p.parentKey === this.options.selected &&
+              family.highlighted.has(p.key)));
+        c.globalAlpha = highlight ? 0.95 : this.options.selected ? 0.15 : 0.65;
+        c.strokeStyle = highlight
+          ? p.key === this.options.selected
+            ? relationColors.parent
+            : relationColors.child
+          : "#688d9e";
+        c.lineWidth = Math.max(1, (highlight ? 3 : 2) * scale);
+        const points = streetRoute(
+          { x: parent.x + 0.3, z: parent.y + 0.3 },
+          { x: pos.x + 0.3, z: pos.y + 0.3 },
+        ).map((v) => this.project(v.x, v.z));
+        const a = points[0],
+          b = points[1];
         c.beginPath();
         c.moveTo(a.x, a.y);
-        c.lineTo(b.x, b.y);
-        c.lineTo(d.x, d.y);
+        points.slice(1).forEach((v) => c.lineTo(v.x, v.y));
         c.stroke();
         if (
           (p.cpu ?? 0) > 0.3 &&
@@ -540,7 +561,11 @@ export class CanvasCityScene {
     for (const p of displayed) {
       const pos = this.positions.get(p.key)!,
         selected = p.key === this.options.selected,
-        dim = this.options.filter && !this.options.filter.has(p.key),
+        dim =
+          (this.options.filter && !this.options.filter.has(p.key)) ||
+          (this.options.roads &&
+            this.options.relationFocus &&
+            !family.highlighted.has(p.key)),
         mb = p.rssBytes / 1048576;
       const birth = this.born.get(p.key),
         progress =
@@ -748,7 +773,10 @@ export class CanvasCityScene {
         width: Math.max(9, size * 36 * scale),
         height: height * scale + 6,
       });
-      if (selected || (this.options.labels && !dim)) {
+      if (
+        (!this.options.relationFocus && selected) ||
+        (this.options.labels && !dim && !family.highlighted.has(p.key))
+      ) {
         c.font = `${Math.max(9, 11 * scale)}px ${this.options.locale === "fa" ? "Vazirmatn" : "Segoe UI"}, sans-serif`;
         const name = p.name.slice(0, 20),
           width = c.measureText(name).width;
@@ -824,6 +852,8 @@ export class CanvasCityScene {
       }
       c.globalAlpha = 1;
     }
+    if (this.options.roads && this.options.relationFocus)
+      this.drawConnections(snapshot);
     if (this.headline) {
       c.fillStyle = "#090f19d9";
       c.fillRect(18, 58, Math.min(this.width - 36, 470), 36);
@@ -902,5 +932,134 @@ export class CanvasCityScene {
       this.drawingBefore = false;
       c.restore();
     }
+  }
+  private drawConnections(snapshot: CitySnapshot): void {
+    const family = processRelations(snapshot.processes, this.options.selected);
+    if (!family.process) return;
+    const c = this.ctx;
+    const roof = (p: CityProcess) => {
+      const pos = this.positions.get(p.key);
+      return pos
+        ? this.project(
+            pos.x + 0.3,
+            pos.y + 0.3,
+            clamp(10 + Math.log2(p.rssBytes / 1048576 + 1) * 11, 12, 145) + 8,
+          )
+        : null;
+    };
+    c.save();
+    for (const child of [family.process, ...family.children.slice(0, 12)]) {
+      const parent = snapshot.processes.find((p) => p.key === child.parentKey);
+      if (!parent) continue;
+      const a = roof(parent),
+        b = roof(child);
+      if (!a || !b) continue;
+      const color =
+        child.key === family.process.key
+          ? relationColors.parent
+          : relationColors.child;
+      const control = {
+        x: (a.x + b.x) / 2,
+        y: Math.min(a.y, b.y) - Math.min(70, Math.abs(a.x - b.x) * 0.25 + 24),
+      };
+      c.strokeStyle = color;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(a.x, a.y);
+      c.quadraticCurveTo(control.x, control.y, b.x, b.y);
+      c.stroke();
+      const t = 0.72,
+        u = 1 - t;
+      const x = u * u * a.x + 2 * u * t * control.x + t * t * b.x,
+        y = u * u * a.y + 2 * u * t * control.y + t * t * b.y;
+      const angle = Math.atan2(
+        u * (control.y - a.y) + t * (b.y - control.y),
+        u * (control.x - a.x) + t * (b.x - control.x),
+      );
+      c.save();
+      c.translate(x, y);
+      c.rotate(angle);
+      c.fillStyle = color;
+      c.beginPath();
+      c.moveTo(6, 0);
+      c.lineTo(-4, -4);
+      c.lineTo(-4, 4);
+      c.closePath();
+      c.fill();
+      c.restore();
+    }
+    const labels: { x: number; y: number; width: number }[] = [];
+    for (const p of [
+      family.parent,
+      family.process,
+      ...family.children.slice(0, this.width < 700 ? 1 : 4),
+    ]) {
+      if (!p) continue;
+      const point = roof(p);
+      if (!point) continue;
+      const role =
+        p.key === family.process.key
+          ? this.options.locale === "fa"
+            ? "انتخاب"
+            : "SELECTED"
+          : p.key === family.parent?.key
+            ? this.options.locale === "fa"
+              ? "والد"
+              : "PARENT"
+            : this.options.locale === "fa"
+              ? "فرزند"
+              : "CHILD";
+      const text = `${role} · ${p.name} · ${p.pid}`;
+      c.font = "11px Vazirmatn, sans-serif";
+      const width = Math.min(230, c.measureText(text).width + 16);
+      const minX =
+        !this.fixed && this.width > 700 && this.options.locale === "fa"
+          ? 330 + width / 2
+          : width / 2 + 12;
+      const maxX =
+        !this.fixed && this.width > 700 && this.options.locale !== "fa"
+          ? this.width - 330 - width / 2
+          : this.width - width / 2 - 12;
+      let x = clamp(point.x, Math.min(minX, maxX), maxX);
+      const maxY =
+        !this.fixed && this.width < 700
+          ? this.height * 0.52 - 50
+          : this.height - 70;
+      let y = clamp(point.y - 24, 30, Math.max(30, maxY));
+      for (
+        let attempt = 0;
+        attempt < 12 &&
+        labels.some(
+          (l) =>
+            Math.abs(l.x - x) < (l.width + width) / 2 + 8 &&
+            Math.abs(l.y - y) < 28,
+        );
+        attempt++
+      ) {
+        y -= 28;
+        if (y < 30) {
+          y = Math.max(30, maxY);
+          x = clamp(x + width / 2, Math.min(minX, maxX), maxX);
+        }
+      }
+      labels.push({ x, y, width });
+      c.strokeStyle = "#9db6c7";
+      c.lineWidth = 0.8;
+      c.beginPath();
+      c.moveTo(point.x, point.y);
+      c.lineTo(x, y + 11);
+      c.stroke();
+      c.fillStyle = "#0b1522f0";
+      c.fillRect(x - width / 2, y, width, 22);
+      c.fillStyle =
+        p.key === family.process.key
+          ? relationColors.selected
+          : p.key === family.parent?.key
+            ? relationColors.parent
+            : relationColors.child;
+      c.textAlign = "center";
+      c.fillText(text, x, y + 15, width - 12);
+    }
+    c.restore();
   }
 }

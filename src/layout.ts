@@ -1,5 +1,6 @@
 import type { CityProcess } from "./model.ts";
 import { architectures, classify, districtRoot } from "./districts.ts";
+import { visibleProcesses } from "./relationships.ts";
 export const hash = (value: string): number => {
   let n = 2166136261;
   for (let i = 0; i < value.length; i++)
@@ -14,12 +15,7 @@ export class CityLayout {
   readonly plots = new Map<string, Plot>();
   private retired = new Map<string, Plot>();
   sync(processes: CityProcess[], selected: string | null) {
-    const priority = [...processes]
-      .sort((a, b) => b.rssBytes - a.rssBytes)
-      .slice(0, 110);
-    const target = processes.find((p) => p.key === selected);
-    if (target && !priority.some((p) => p.key === target.key))
-      priority.splice(109, 1, target);
+    const priority = visibleProcesses(processes, selected);
     const wanted = new Set(priority.map((p) => p.key));
     for (const [key, plot] of this.plots)
       if (!wanted.has(key)) {
