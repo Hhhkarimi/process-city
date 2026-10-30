@@ -1,0 +1,23 @@
+{
+  "name": "process-city",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Your computer, a living city. Local-first Windows process observatory.",
+  "scripts": {
+    "dev": "vite --configLoader native --host 127.0.0.1 --port 5174",
+    "build": "tsc --noEmit && vite build --configLoader native",
+    "preview": "vite preview --configLoader native --host 127.0.0.1 --port 4174",
+    "start": "node --experimental-strip-types server/server.ts",
+    "monitor": "node --experimental-strip-types server/server.ts",
+    "test": "node --experimental-strip-types --test --test-isolation=none tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "vite": "8.2.2"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}
