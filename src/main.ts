@@ -11,6 +11,8 @@ import { CityAnalyzer, sortProcesses } from "./metrics.ts";
 import { DemoWorld } from "./demo.ts";
 import { themes } from "./themes.ts";
 import { CityScene } from "./city.ts";
+import { Experience } from "./experience.ts";
+import { architectures, classify } from "./districts.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 let fa = new URLSearchParams(location.search).get("lang") === "fa";
@@ -99,7 +101,33 @@ function savePreferences(): void {
     /* Preferences are optional. */
   }
 }
+let liveSnapshot: CitySnapshot | null = null;
+const experience = new Experience({
+  fa: () => fa,
+  mode: () => mode,
+  theme,
+  scene: () => scene,
+  selected: () => selected,
+  select: (key) => {
+    selected = key;
+    renderPanels(true);
+  },
+  demo: () => demo,
+  latest: () => liveSnapshot,
+  display: (frame) => {
+    snapshot = frame ?? liveSnapshot;
+    renderPanels(true);
+  },
+  notify,
+  poll: () => {
+    void poll();
+  },
+  restartAnalysis: () => {
+    analyzer = new CityAnalyzer();
+  },
+});
 function renderShell(): void {
+  const view = scene?.view();
   scene?.destroy();
   document.documentElement.lang = fa ? "fa" : "en";
   document.documentElement.dir = fa ? "rtl" : "ltr";
@@ -112,13 +140,13 @@ function renderShell(): void {
   <main><section class="page-heading"><div><div class="heading-kicker">${t("THE PROCESS OBSERVATORY", "رصدخانهٔ پردازش‌ها")}</div><h1>${t("Your system. A new perspective.", "سیستم تو، از نگاهی تازه.")}</h1><p>${t("Every process a building. Every connection a street.", "هر پردازش یک ساختمان؛ هر رابطه یک خیابان.")}</p></div><div class="source-control"><label for="mode">${t("DATA SOURCE", "منبع داده")}</label><select id="mode"><option value="demo" ${mode === "demo" ? "selected" : ""}>${t("Demo simulation", "شبیه‌سازی دمو")}</option><option value="live" ${mode === "live" ? "selected" : ""}>${t("Live Windows", "ویندوز زنده")}</option></select><span id="connection-status"></span></div></section>
   <section class="stats" aria-label="${t("System metrics", "شاخص‌های سیستم")}"><div class="stat">${icon("cpu")}<div><span>${t("CPU activity", "فعالیت CPU")}</span><strong id="cpu-value">—</strong><small>${t("of total machine capacity", "از کل ظرفیت سیستم")}</small></div><div class="stat-bars" id="cpu-bars"></div></div><div class="stat">${icon("ram")}<div><span>${t("Physical memory", "حافظهٔ فیزیکی")}</span><strong id="memory-value">—</strong><small id="memory-detail"></small></div><div class="memory-meter"><i id="memory-fill"></i></div></div><div class="stat">${icon("city")}<div><span>${t("City population", "جمعیت شهر")}</span><strong id="process-value">—</strong><small id="process-detail"></small></div></div><button class="stat growth-stat" data-action="growth-filter">${icon("drop")}<div><span>${t("Growing memory", "رشد حافظه")}</span><strong id="growth-value">—</strong><small>${t("a signal, not a leak diagnosis", "یک نشانه؛ نه تشخیص قطعی نشت")}</small></div></button></section>
   <div id="connection-banner" class="connection-banner" role="status" hidden></div>
-  <section class="workspace"><div class="city-column"><div class="city-toolbar"><div class="city-title"><span class="status-dot"></span><strong>${t("City view", "نمای شهر")}</strong><span id="source-badge" class="badge"></span></div><div class="city-controls"><label class="sr-only" for="theme">${t("City theme", "تم شهر")}</label><select id="theme">${themes.map((th) => `<option value="${th.id}" ${th.id === themeId ? "selected" : ""}>${fa ? th.fa : th.name}</option>`).join("")}</select><button data-action="pause" class="icon-button" aria-label="${paused ? t("Resume updates", "ادامهٔ به‌روزرسانی") : t("Pause updates", "توقف به‌روزرسانی")}">${icon(paused ? "play" : "pause")}</button></div></div>
+  <section id="experience-tools" class="experience-tools" aria-label="${t("Cinematic controls", "کنترل‌های سینمایی")}"></section><section class="workspace"><div class="city-column"><div class="city-toolbar"><div class="city-title"><span class="status-dot"></span><strong>${t("City view", "نمای شهر")}</strong><span id="source-badge" class="badge"></span></div><div class="city-controls"><label class="sr-only" for="theme">${t("City theme", "تم شهر")}</label><select id="theme">${themes.map((th) => `<option value="${th.id}" ${th.id === themeId ? "selected" : ""}>${fa ? th.fa : th.name}</option>`).join("")}</select><button data-action="pause" class="icon-button" aria-label="${paused ? t("Resume updates", "ادامهٔ به‌روزرسانی") : t("Pause updates", "توقف به‌روزرسانی")}">${icon(paused ? "play" : "pause")}</button></div></div>
   <div class="city-stage"><canvas id="city" tabindex="0" role="img" aria-label="${t("Interactive isometric process city. Select a building or use the process list. Drag to pan; plus and minus to zoom.", "شهر ایزومتریک پردازش‌ها. یک ساختمان یا پردازش را از فهرست انتخاب کنید. برای جابه‌جایی بکشید و برای بزرگ‌نمایی از مثبت و منفی استفاده کنید.")}"></canvas><div class="city-caption"><span class="caption-coordinate">${t("SYSTEM DISTRICT", "ناحیهٔ سیستم")}</span><span>${t("Working set → skyline", "حافظهٔ مقیم ← خط آسمان")}</span></div><div class="view-tools"><button data-action="zoom-in" aria-label="${t("Zoom in", "بزرگ‌نمایی")}">${icon("plus")}</button><button data-action="zoom-out" aria-label="${t("Zoom out", "کوچک‌نمایی")}">${icon("minus")}</button><button data-action="fit" aria-label="${t("Fit city", "نمای کامل شهر")}">${icon("fit")}</button><span></span><button data-action="labels" aria-pressed="${labels}" aria-label="${t("Toggle building labels", "نمایش نام ساختمان‌ها")}">Aa</button><button data-action="roads" aria-pressed="${roads}" aria-label="${t("Toggle parent-child streets", "نمایش خیابان‌های والد و فرزند")}">${icon("link")}</button></div></div>
   <div class="city-legend"><span><i class="legend-building"></i>${t("Height & volume = RAM", "ارتفاع و حجم = RAM")}</span><span><i class="legend-lights"></i>${t("Lit windows = CPU", "پنجره‌های روشن = CPU")}</span><span><i class="legend-street"></i>${t("Streets = parent / child", "خیابان‌ها = والد / فرزند")}</span></div>
   <section class="sandbox" aria-label="${t("Demo scenarios", "سناریوهای دمو")}"><div><span class="sandbox-label">${t("THE SANDBOX", "محیط آزمایش")}</span><strong>${t("Make a little chaos.", "کمی آشوب بساز.")}</strong><small>${t("Synthetic scenarios. No actual CPU or RAM is allocated.", "سناریوی ساختگی؛ CPU یا RAM واقعی مصرف نمی‌شود.")}</small></div><div class="sandbox-actions"><button data-action="surge" ${mode === "live" ? "disabled" : ""} aria-pressed="${demo.surge}">${icon("cpu")}${t("CPU surge", "موج CPU")}</button><button data-action="leak" ${mode === "live" ? "disabled" : ""} aria-pressed="${demo.leak}">${icon("drop")}${t("Memory leak", "نشت حافظه")}</button><button data-action="recover" ${mode === "live" ? "disabled" : ""} aria-label="${t("Recover city", "بازیابی شهر")}">${icon("reset")}</button></div></section>
   </div><aside id="inspector" class="inspector" aria-label="${t("Process inspector", "جزئیات پردازش")}"></aside></section>
-  <section class="process-section"><div class="process-heading"><div><h2>${t("Behind the skyline", "پشت خط آسمان")}</h2><p>${t("The full process list. The city shows up to 110 buildings.", "فهرست کامل پردازش‌ها؛ شهر تا ۱۱۰ ساختمان را نمایش می‌دهد.")}</p></div><div class="list-controls"><label class="search">${icon("search")}<input id="search" type="search" maxlength="80" placeholder="${t("Find a process or PID…", "نام پردازش یا PID…")}" aria-label="${t("Search processes", "جست‌وجوی پردازش‌ها")}" value="${esc(query)}"></label><select id="sort" aria-label="${t("Sort processes", "مرتب‌سازی پردازش‌ها")}"><option value="ram" ${sort === "ram" ? "selected" : ""}>${t("Memory ↓", "حافظه ↓")}</option><option value="cpu" ${sort === "cpu" ? "selected" : ""}>${t("CPU ↓", "CPU ↓")}</option><option value="name" ${sort === "name" ? "selected" : ""}>${t("Name A–Z", "نام A–Z")}</option></select></div></div><div id="filter-state"></div><div id="process-list" class="process-list"></div></section>
-  <section class="event-section"><h2>${t("City dispatch", "رویدادهای شهر")}</h2><div id="events"></div></section><footer class="footer"><span>PROCESS CITY <span class="version">v1.0</span> · ${t("A different way to see your machine.", "نگاهی متفاوت به کامپیوترت.")}</span><span>${t("Read-only. No telemetry. No cloud process uploads.", "فقط‌خواندنی؛ بدون تله‌متری و ارسال پردازش‌ها به ابر.")}</span><button data-action="help" class="text-button">${t("Guide & export", "راهنما و خروجی")}</button></footer></main>
+  <section id="experience" class="experience"></section><section class="process-section"><div class="process-heading"><div><h2>${t("Behind the skyline", "پشت خط آسمان")}</h2><p>${t("The full process list. The city shows up to 110 buildings.", "فهرست کامل پردازش‌ها؛ شهر تا ۱۱۰ ساختمان را نمایش می‌دهد.")}</p></div><div class="list-controls"><label class="search">${icon("search")}<input id="search" type="search" maxlength="80" placeholder="${t("Find a process or PID…", "نام پردازش یا PID…")}" aria-label="${t("Search processes", "جست‌وجوی پردازش‌ها")}" value="${esc(query)}"></label><select id="sort" aria-label="${t("Sort processes", "مرتب‌سازی پردازش‌ها")}"><option value="ram" ${sort === "ram" ? "selected" : ""}>${t("Memory ↓", "حافظه ↓")}</option><option value="cpu" ${sort === "cpu" ? "selected" : ""}>${t("CPU ↓", "CPU ↓")}</option><option value="name" ${sort === "name" ? "selected" : ""}>${t("Name A–Z", "نام A–Z")}</option></select></div></div><div id="filter-state"></div><div id="process-list" class="process-list"></div></section>
+  <section class="event-section"><h2>${t("City dispatch", "رویدادهای شهر")}</h2><div id="events"></div></section><footer class="footer"><span>PROCESS CITY <span class="version">v2.0</span> · ${t("A different way to see your machine.", "نگاهی متفاوت به کامپیوترت.")}</span><span>${t("Read-only. No telemetry. No cloud process uploads.", "فقط‌خواندنی؛ بدون تله‌متری و ارسال پردازش‌ها به ابر.")}</span><button data-action="help" class="text-button">${t("Guide & export", "راهنما و خروجی")}</button></footer></main>
   <dialog id="help-dialog"><div class="dialog-heading"><h2>${t("A little map to your city.", "نقشه‌ای کوچک برای شهر تو.")}</h2><button data-action="close-help" aria-label="${t("Close help", "بستن راهنما")}">${icon("close")}</button></div><div class="help-content"><h3>${t("Read the skyline", "خواندن خط آسمان")}</h3><p>${t("Building volume represents working-set RAM on a logarithmic scale. CPU activity lights more windows. Streets follow parent process IDs observed in the same snapshot. The process list contains every collected process.", "حجم ساختمان با حافظهٔ مقیم پردازش در مقیاس لگاریتمی مرتبط است. فعالیت CPU پنجره‌های بیشتری را روشن می‌کند. خیابان‌ها از شناسهٔ والد در همان نمونه پیروی می‌کنند. فهرست، همهٔ پردازش‌های جمع‌آوری‌شده را نشان می‌دهد.")}</p><h3>${t("Why the city floods", "چرا شهر زیر آب می‌رود؟")}</h3><p>${t("Water indicates sustained growth in private memory: at least 16 MB and 15% growth over at least 12 seconds, with 70% of intervals increasing. This is a heuristic, not proof of a memory leak. The demo leak grows memory-lab.exe by 24 MB per update.", "آب نشانهٔ رشد پیوستهٔ حافظهٔ خصوصی است: حداقل ۱۶ مگابایت و ۱۵٪ رشد در دست‌کم ۱۲ ثانیه، با افزایش در ۷۰٪ فاصله‌های نمونه‌برداری. این یک تخمین است، نه اثبات نشت حافظه. سناریوی دمو در هر به‌روزرسانی ۲۴ مگابایت به memory-lab.exe می‌افزاید.")}</p><h3>${t("See your real Windows processes", "دیدن پردازش‌های واقعی ویندوز")}</h3><p>${t("Run this project locally with Node.js 22.18+ or 24+. Then open the loopback URL and select Live Windows. The hosted demo cannot read your computer.", "پروژه را با Node.js نسخهٔ ۲۲٫۱۸ به بالا یا ۲۴ به بالا روی ویندوز اجرا کنید. سپس نشانی محلی را باز و «ویندوز زنده» را انتخاب کنید. دموی آنلاین به پردازش‌های کامپیوتر شما دسترسی ندارد.")}</p><pre><code>npm ci\nnpm run build\nnpm start\n\nhttp://127.0.0.1:4317</code></pre><p>${t("If Windows blocks launching a child collector, use the documented two-terminal mode. Protected processes may expose no CPU counter. CPU percentages use total machine capacity; the first sample needs a second reading.", "اگر ویندوز اجرای جمع‌آورنده را محدود کرد، از روش دو ترمینال در راهنما استفاده کنید. شمارندهٔ CPU برخی پردازش‌های محافظت‌شده در دسترس نیست. درصد CPU از کل ظرفیت سیستم است و محاسبهٔ آن به دو نمونه نیاز دارد.")}</p><h3>${t("Keyboard & camera", "صفحه‌کلید و دوربین")}</h3><p>${t("Select processes from the list with Tab and Enter. Focus the canvas, then use arrows to pan, +/− to zoom and 0 to reset. Capture city downloads a PNG of the canvas. Snapshots are downloaded only when you choose Export snapshot.", "با Tab و Enter از فهرست پردازش انتخاب کنید. در بوم، کلیدهای جهت برای جابه‌جایی، مثبت و منفی برای بزرگ‌نمایی و صفر برای بازنشانی است. عکس شهر، تصویر PNG بوم را دریافت می‌کند. داده‌ها فقط با انتخاب خروجی نمونه دریافت می‌شوند.")}</p><button data-action="export-json">${icon("download")}${t("Export current snapshot", "دریافت نمونهٔ فعلی")}</button></div></dialog><div id="toast" role="status" class="toast" hidden></div>`;
   try {
     scene = new CityScene(
@@ -139,6 +167,8 @@ function renderShell(): void {
   } catch (e) {
     notify(e instanceof Error ? e.message : "Canvas unavailable.");
   }
+  if (view) scene?.restore(view);
+  experience.mount();
   renderPanels();
 }
 function filtered(): CityProcess[] {
@@ -175,7 +205,7 @@ function inspectorMarkup(): string {
     return `<div class="inspector-header">${icon("search")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span></div><div class="inspector-empty">${icon("city")}<h2>${t("Meet a building.", "با یک ساختمان آشنا شو.")}</h2><p>${t("Select any building or process in the list to follow its story.", "یک ساختمان یا پردازش از فهرست انتخاب کنید تا جزئیاتش را ببینید.")}</p></div>`;
   const parent = snapshot!.processes.find((v) => v.key === p.parentKey),
     children = snapshot!.processes.filter((v) => v.parentKey === p.key);
-  return `<div class="inspector-header">${icon("cpu")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span><span class="inspector-live">${paused ? t("PAUSED", "متوقف") : t("TRACKING", "در حال رصد")}</span></div><div class="inspector-content"><div class="process-avatar">${icon("city")}</div><h2 dir="ltr">${esc(p.name)}</h2><div class="pid-line">PID <bdi>${p.pid}</bdi> <span>·</span> PPID <bdi>${p.ppid}</bdi></div><div class="inspector-metrics"><div><span>${t("CPU SHARE", "سهم CPU")}</span><strong>${percent(p.cpu)}</strong></div><div><span>${t("WORKING SET", "حافظهٔ مقیم")}</span><strong><bdi>${size(p.rssBytes)}</bdi></strong></div></div><div class="inspector-separator"></div><div class="history-heading"><h3>${t("Private memory", "حافظهٔ خصوصی")}</h3><span>${num(p.history.length)} ${t("samples", "نمونه")}</span></div><div class="history-value"><bdi>${size(p.privateBytes)}</bdi><span class="${p.growing ? "warning-text" : ""}">${p.growthMB >= 0 ? "+" : "−"}${num(Math.abs(p.growthMB), 1)} MB</span></div>${sparkline(p)}<div class="chart-axis"><span>${t("Earlier", "قبل‌تر")}</span><span>${t("Now", "اکنون")}</span></div>
+  return `<div class="inspector-header">${icon("cpu")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span><span class="inspector-live">${experience.replaying ? t("REPLAY", "بازپخش") : paused ? t("PAUSED", "متوقف") : t("TRACKING", "در حال رصد")}</span></div><div class="inspector-content"><div class="process-avatar">${icon("city")}</div><h2 dir="ltr">${esc(p.name)}</h2><div class="architecture-badge">${fa ? architectures[classify(p.name)].fa : architectures[classify(p.name)].en}</div><button data-exp="enter" class="enter-building">↗ ${t("Enter this building", "ورود به این ساختمان")}</button><div class="pid-line">PID <bdi>${p.pid}</bdi> <span>·</span> PPID <bdi>${p.ppid}</bdi></div><div class="inspector-metrics"><div><span>${t("CPU SHARE", "سهم CPU")}</span><strong>${percent(p.cpu)}</strong></div><div><span>${t("WORKING SET", "حافظهٔ مقیم")}</span><strong><bdi>${size(p.rssBytes)}</bdi></strong></div></div><div class="inspector-separator"></div><div class="history-heading"><h3>${t("Private memory", "حافظهٔ خصوصی")}</h3><span>${num(p.history.length)} ${t("samples", "نمونه")}</span></div><div class="history-value"><bdi>${size(p.privateBytes)}</bdi><span class="${p.growing ? "warning-text" : ""}">${p.growthMB >= 0 ? "+" : "−"}${num(Math.abs(p.growthMB), 1)} MB</span></div>${sparkline(p)}<div class="chart-axis"><span>${t("Earlier", "قبل‌تر")}</span><span>${t("Now", "اکنون")}</span></div>
   ${p.growing ? `<div class="growth-alert">${icon("drop")}<div><strong>${t("Sustained memory growth", "رشد پیوستهٔ حافظه")}</strong><p>+${num(p.growthRate, 1)} MB/min · ${t("Possible leak; inspect further.", "احتمال نشت؛ نیازمند بررسی بیشتر.")}</p></div></div>` : `<div class="stable-note"><span class="status-dot"></span>${t("No sustained growth signal", "نشانه‌ای از رشد پیوسته دیده نشد")}</div>`}
   <div class="inspector-separator"></div><h3 class="relationship-title">${icon("link")}${t("Connected streets", "خیابان‌های متصل")}</h3><div class="relation-label">${t("PARENT", "والد")}</div>${parent ? `<button class="relation" data-process="${esc(parent.key)}"><span dir="ltr">${esc(parent.name)}</span><span>${parent.pid}</span>${icon("arrow")}</button>` : `<p class="muted-note">${t("Parent is unavailable or has exited.", "والد در دسترس نیست یا پایان یافته است.")}</p>`}<div class="relation-label children-label">${t("CHILDREN", "فرزندان")} <span>${num(children.length)}</span></div>${children
     .slice(0, 6)
@@ -238,7 +268,21 @@ function renderPanels(force = false): void {
       : stale
         ? t("STALE", "قدیمی")
         : t("LIVE / LOCAL", "زنده / محلی");
-  byId("source-badge").classList.toggle("live", mode === "live" && !stale);
+  byId("source-badge").classList.toggle(
+    "live",
+    mode === "live" && !stale && !experience.replaying,
+  );
+  if (experience.replaying)
+    byId("source-badge").textContent =
+      t("REPLAY / ", "بازپخش / ") +
+      (experience.source() === "demo"
+        ? t("SIMULATION", "شبیه‌سازی")
+        : t("LOCAL RECORDING", "ضبط محلی"));
+  if (experience.replaying)
+    byId("connection-status").textContent = t(
+      "Viewing a recording · source shown on city",
+      "در حال مشاهدهٔ ضبط · منبع روی شهر درج شده",
+    );
   const banner = byId("connection-banner");
   banner.hidden = !connectionError;
   banner.textContent = connectionError;
@@ -247,11 +291,22 @@ function renderPanels(force = false): void {
     filter === "growth" || parentFilter
       ? `<button class="filter-chip" data-action="clear-filter">${parentFilter ? t("Child processes only", "فقط پردازش‌های فرزند") : t("Growing memory only", "فقط رشد حافظه")}${icon("close")}</button>`
       : "";
-  if (force || !document.activeElement?.closest("#process-list")) {
+  const focusedProcess = document.activeElement?.closest<HTMLButtonElement>(
+    "#process-list [data-process]",
+  )?.dataset.process;
+  {
     byId("process-list").innerHTML = values.length
       ? `<table><thead><tr><th>${t("PROCESS", "پردازش")}</th><th>PID</th><th>CPU</th><th>${t("WORKING SET", "حافظهٔ مقیم")}</th><th>${t("PRIVATE", "خصوصی")}</th><th>${t("GROWTH", "رشد")}</th></tr></thead><tbody>${values.map((p) => `<tr class="${p.key === selected ? "selected" : ""}"><td><button data-process="${esc(p.key)}"><span class="process-dot ${p.growing ? "growing" : ""}"></span><span dir="ltr">${esc(p.name)}</span></button></td><td><bdi>${p.pid}</bdi></td><td>${percent(p.cpu)}</td><td><bdi>${size(p.rssBytes)}</bdi></td><td><bdi>${size(p.privateBytes)}</bdi></td><td class="${p.growing ? "warning-text" : ""}">${p.growing ? "↗ " + num(p.growthMB, 1) + " MB" : "—"}</td></tr>`).join("")}</tbody></table>`
       : `<div class="list-empty">${t("No matching processes. Try another name or clear the growth filter.", "پردازشی پیدا نشد. نام دیگری را جست‌وجو کنید یا فیلتر رشد را بردارید.")}</div>`;
   }
+  if (focusedProcess)
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "#process-list [data-process]",
+      ),
+    )
+      .find((button) => button.dataset.process === focusedProcess)
+      ?.focus({ preventScroll: true });
   if (force || !document.activeElement?.closest("#inspector"))
     byId("inspector").innerHTML = inspectorMarkup();
   byId("events").innerHTML = snapshot.events.length
@@ -263,6 +318,7 @@ function renderPanels(force = false): void {
         )
         .join("")
     : `<p class="muted-note">${t("Watching for process starts, exits and memory growth…", "در انتظار آغاز، پایان یا رشد حافظهٔ پردازش‌ها…")}</p>`;
+  experience.update(snapshot);
   scene?.set(snapshot, theme(), {
     labels,
     roads,
@@ -273,14 +329,16 @@ function renderPanels(force = false): void {
         ? new Set(values.map((p) => p.key))
         : null,
     locale: fa ? "fa" : "en",
-    mode,
+    mode: experience.source(),
   });
 }
 function accept(raw: RawSnapshot): void {
   if (raw.capturedAt === lastTimestamp) return;
   lastTimestamp = raw.capturedAt;
   rawSnapshot = raw;
-  snapshot = analyzer.update(raw);
+  liveSnapshot = analyzer.update(raw);
+  experience.record(liveSnapshot);
+  snapshot = experience.display(liveSnapshot);
   lastReceive = Date.now();
   if (!selected)
     selected =
@@ -323,9 +381,12 @@ async function changeMode(value: string): Promise<void> {
   parentFilter = null;
   if (value === "demo") {
     mode = "demo";
+    demo = new DemoWorld();
     paused = false;
     analyzer = new CityAnalyzer();
     snapshot = null;
+    liveSnapshot = null;
+    experience.reset(mode);
     selected = null;
     lastTimestamp = "";
     connectionError = "";
@@ -350,6 +411,8 @@ async function changeMode(value: string): Promise<void> {
     selected = null;
     analyzer = new CityAnalyzer();
     snapshot = null;
+    liveSnapshot = null;
+    experience.reset(mode);
     lastTimestamp = "";
     connectionError = "";
     renderShell();
@@ -439,15 +502,24 @@ app.addEventListener("click", async (event) => {
       renderPanels();
       break;
     case "surge":
-      if (mode === "demo") {
+      if (
+        mode === "demo" &&
+        !experience.replaying &&
+        !experience.scenarioLocked
+      ) {
         demo.surge = !demo.surge;
         renderShell();
         void poll();
       }
       break;
     case "leak":
-      if (mode === "demo") {
-        demo.leak = !demo.leak;
+      if (
+        mode === "demo" &&
+        !experience.replaying &&
+        !experience.scenarioLocked
+      ) {
+        if (demo.leak) demo.recover();
+        else demo.startLeak();
         selected =
           snapshot?.processes.find((p) => p.pid === 7331)?.key ?? selected;
         renderShell();
@@ -455,7 +527,11 @@ app.addEventListener("click", async (event) => {
       }
       break;
     case "recover":
-      if (mode === "demo") {
+      if (
+        mode === "demo" &&
+        !experience.replaying &&
+        !experience.scenarioLocked
+      ) {
         demo.recover();
         renderShell();
         void poll();
@@ -483,12 +559,24 @@ app.addEventListener("click", async (event) => {
     case "screenshot":
       try {
         if (scene)
-          download(await scene.image(), `process-city-${themeId}-${mode}.png`);
+          download(
+            await scene.image(),
+            `process-city-${themeId}-${experience.source()}.png`,
+          );
       } catch {
         notify(t("Could not capture the city.", "گرفتن تصویر شهر ممکن نشد."));
       }
       break;
     case "export-json":
+      if (experience.replaying) {
+        notify(
+          t(
+            "Use Save recording to export this replay.",
+            "برای خروجی این بازپخش از «ذخیرهٔ ضبط» استفاده کن.",
+          ),
+        );
+        break;
+      }
       if (rawSnapshot)
         download(
           new Blob(
@@ -532,7 +620,12 @@ app.addEventListener("change", (event) => {
   }
 });
 renderShell();
-void poll();
+if (
+  new URLSearchParams(location.search).get("mode") === "live" &&
+  ["127.0.0.1", "localhost"].includes(location.hostname)
+)
+  void changeMode("live");
+else void poll();
 setInterval(() => {
   void poll();
 }, 2000);

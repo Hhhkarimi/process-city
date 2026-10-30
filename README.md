@@ -8,6 +8,19 @@ An interactive Windows process observatory. Every process becomes a building, wo
 
 ![Process City observatory](docs/screenshots/desktop.png)
 
+## The v2 experience
+
+**Launch → investigate → rewind → share.** A process monitor with a visible story, using Canvas 2D rather than a game-engine dependency.
+
+1. **Districts awaken.** App families settle together using observed parent identity. New buildings rise from the ground, streets light up, and exited processes dissolve. The optional auto director follows meaningful births, with a cooldown. Try **Launch a demo app**, or open a real application in Live Windows.
+2. **Save the city.** A 45-second simulation chooses a persistent process as a hidden memory-growth source and begins a fresh observation window. Inspect private-memory trends and contain your suspect. Wrong guesses cost time; correct containment drains the flood and waits for memory recovery before declaring victory. Pausing sampling pauses the game. No real process is stopped.
+3. **Time machine.** Scrub a rolling in-memory recording, replay at 1×/4×/12×, pin a baseline, and overlay its ghost skyline. Compare process births, exits and physical RAM. Save or import versioned JSON recordings. The buffer holds at most 90 frames and 25,000 process samples; imports are limited to 12 MB. A **60-second demo story** is available immediately.
+4. **Cinematic inspection.** Enter a selected building with a smooth 2.5D camera move, tour the twelve largest buildings, or return to the city overview. Reduced-motion preferences make moves immediate. This is an isometric close-up, not a first-person interior simulation.
+5. **Architectural DNA.** Browser residences, editor workshops, compute foundries, design studios, broadcast towers and system infrastructure have distinctive accents and rooftops. Styles are inferred from executable names; neighborhoods and streets use observed ancestry, not a claim about verified app identity.
+6. **Share the last minute.** Render up to the last 60 recorded seconds into a roughly 12-second local video, in landscape or portrait. The preview includes a download link. MP4 is used when the browser supports its encoder; WebM is the fallback. Source, sample timestamp, CPU and RAM remain visible in the clip. Rendering needs a visible tab for about 12 seconds; no process recording is uploaded.
+
+Persian and English are included throughout, with a bundled **Vazirmatn** font. The four community-friendly themes remain available. [Watch a generated demo clip](docs/process-city-demo.mp4).
+
 ## Two modes, honestly labeled
 
 | Mode            | Data source                                     | Where it runs                                                    |
@@ -28,6 +41,8 @@ npm start
 ```
 
 Open **http://127.0.0.1:4317** and choose **Live Windows**. The local server starts its own hidden PowerShell collector. Closing it also stops that collector.
+
+Use `http://127.0.0.1:4317/?lang=fa&mode=live` to open directly in Persian live mode. Live mode is only auto-selected on a loopback hostname.
 
 ### Restricted environments: two-terminal mode
 
@@ -98,6 +113,12 @@ Add a typed `Theme` entry to `src/themes.ts`. Geometry variants are implemented 
 - `src/metrics.ts`: CPU deltas, process identity, memory growth, bounded histories and events.
 - `src/city.ts`: dependency-free Canvas 2D isometric renderer, stable process slots, hit testing and camera controls; at most 20 animation frames per second, suspended while the page is hidden.
 - `src/main.ts`: bilingual UI, collection lifecycle and explicit source states.
+- `src/districts.ts`: executable-name styles and cycle-safe application ancestry.
+- `src/tape.ts`: bounded recording, validated JSON import and frame comparison.
+- `src/rescue.ts`: simulation-clock rescue state machine, with a memory-recovery gate.
+- `src/experience.ts`: cinematic direction, recording controls, challenge and video UI.
+- `src/showcase.ts`: a reproducible, clearly labeled synthetic story.
+- `src/video.ts`: local canvas capture, encoder fallback, cancellation and stream cleanup.
 
 CPU percentages use **total machine capacity**: one saturated logical core on a four-core system is about 25%. The first reading needs a second sample. Per-process CPU may be unavailable or not sum exactly to the system CPU counter. Physical RAM usage comes from system availability; process working sets are not summed because shared pages can be counted more than once.
 
@@ -127,7 +148,7 @@ Import this repository into Vercel using the **Vite** preset: build `npm run bui
 
 ## Scope
 
-Version 1 is a read-only Windows monitor and browser simulation, not an OS replacement, process killer or leak profiler. It has no remote-device monitoring, autostart service, installer, session replay or historical database. Snapshot exports can contain process names; export and share deliberately. No telemetry or analytics is included. The monitoring app and PowerShell collector themselves consume some resources, which are included in live readings.
+Version 2 is a read-only Windows monitor and browser simulation. It includes a bounded local replay buffer and explicit recording/video downloads; it has no remote-device monitoring, autostart service, installer or persistent historical database. Reloading clears the in-memory recording unless you saved it. Exports may contain process names. No telemetry or analytics is included. The monitoring app and PowerShell collector themselves consume some resources, which are included in live readings.
 
 ## License
 

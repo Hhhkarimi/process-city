@@ -1,4 +1,5 @@
 import type { CityProcess, CitySnapshot, Theme } from "./model.ts";
+import { architectures, classify, districtRoot } from "./districts.ts";
 interface Spot {
   x: number;
   y: number;
@@ -28,6 +29,14 @@ const hash = (s: string): number => {
   return n >>> 0;
 };
 export class CityScene {
+  private cameraTarget: { zoom: number; x: number; y: number } | null = null;
+  private born = new Map<string, number>();
+  private departing: { p: CityProcess; pos: Spot; at: number }[] = [];
+  private ghost: CitySnapshot | null = null;
+  private flood = 0;
+  private headline = "";
+  private focusedKey: string | null = null;
+  private fixed: { width: number; height: number } | undefined;
   private ctx: CanvasRenderingContext2D;
   private positions = new Map<string, Spot>();
   private hits: Hit[] = [];
@@ -52,11 +61,12 @@ export class CityScene {
     null;
   private dragged = false;
   private reduced = matchMedia("(prefers-reduced-motion: reduce)");
-  private observer: ResizeObserver;
+  private observer: ResizeObserver | null = null;
   constructor(
     private canvas: HTMLCanvasElement,
     theme: Theme,
     private select: (key: string) => void,
+    fixed?: { width: number; height: number },
   ) {
     const context = canvas.getContext("2d");
     if (!context)
@@ -65,9 +75,13 @@ export class CityScene {
       );
     this.ctx = context;
     this.theme = theme;
-    this.observer = new ResizeObserver(() => this.resize());
-    this.observer.observe(canvas);
+    this.fixed = fixed;
+    if (!fixed) {
+      this.observer = new ResizeObserver(() => this.resize());
+      this.observer.observe(canvas);
+    } else this.resize();
     canvas.addEventListener("pointerdown", (event) => {
+      this.cameraTarget = null;
       this.down = {
         x: event.clientX,
         y: event.clientY,
@@ -121,11 +135,12 @@ export class CityScene {
         event.preventDefault();
         this.zoom(-0.15);
       }
-      if (event.key === "0") this.reset();
+      if (event.key === "0" || event.key === "Escape") this.reset();
       if (
         ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)
       ) {
         event.preventDefault();
+        this.cameraTarget = null;
         this.pan.x +=
           event.key === "ArrowLeft" ? 25 : event.key === "ArrowRight" ? -25 : 0;
         this.pan.y +=
@@ -145,9 +160,29 @@ export class CityScene {
       this.lastDraw = now;
       this.draw(now);
     };
-    this.frame = requestAnimationFrame(animate);
+    if (!fixed) this.frame = requestAnimationFrame(animate);
   }
   set(snapshot: CitySnapshot, theme: Theme, options: CityOptions): void {
+    if (snapshot.at !== this.snapshot?.at) {
+      const previous = new Set(
+        this.snapshot?.processes.map((p) => p.key) ?? [],
+      );
+      const next = new Set(snapshot.processes.map((p) => p.key));
+      const now = performance.now();
+      for (const p of snapshot.processes)
+        if (!previous.has(p.key))
+          this.born.set(p.key, now - (this.snapshot ? 0 : hash(p.key) % 900));
+      for (const p of this.snapshot?.processes ?? []) {
+        const pos = this.positions.get(p.key);
+        if (!next.has(p.key) && pos)
+          this.departing.push({ p, pos: { ...pos }, at: now });
+      }
+      this.departing = this.departing
+        .filter((d) => now - d.at < 2200)
+        .slice(-35);
+      for (const [key, at] of this.born)
+        if (now - at > 3000 || !next.has(key)) this.born.delete(key);
+    }
     this.snapshot = snapshot;
     this.theme = theme;
     this.options = options;
@@ -155,17 +190,64 @@ export class CityScene {
     this.draw(performance.now());
   }
   zoom(delta: number): void {
-    this.zoomValue = clamp(this.zoomValue + delta, 0.5, 2.2);
+    this.cameraTarget = null;
+    this.zoomValue = clamp(this.zoomValue + delta, 0.5, 4);
     this.draw(performance.now());
   }
   reset(): void {
+    this.cameraTarget = null;
+    this.focusedKey = null;
     this.zoomValue = 1;
     this.pan = { x: 0, y: 0 };
     this.draw(performance.now());
   }
   destroy(): void {
     cancelAnimationFrame(this.frame);
-    this.observer.disconnect();
+    this.observer?.disconnect();
+  }
+  view() {
+    return {
+      zoom: this.zoomValue,
+      x: this.pan.x,
+      y: this.pan.y,
+      focus: this.focusedKey,
+    };
+  }
+  restore(view: { zoom: number; x: number; y: number; focus?: string | null }) {
+    this.zoomValue = view.zoom;
+    this.pan = { x: view.x, y: view.y };
+    if (view.focus !== undefined) this.focusedKey = view.focus;
+  }
+  focus(key: string): void {
+    const pos = this.positions.get(key),
+      p = this.snapshot?.processes.find((p) => p.key === key);
+    if (!pos || !p) return;
+    this.focusedKey = key;
+    const zoom = 3.15,
+      scale = Math.min(this.width / 910, this.height / 650) * zoom;
+    const height = clamp(
+      10 + Math.log2(p.rssBytes / 1048576 + 1) * 11,
+      12,
+      145,
+    );
+    this.cameraTarget = {
+      zoom,
+      x: -(pos.x - pos.y) * 32 * scale,
+      y: -(pos.x + pos.y - 12) * 16 * scale + height * 0.45 * scale,
+    };
+    if (this.reduced.matches || this.options.paused) {
+      this.restore(this.cameraTarget);
+      this.cameraTarget = null;
+      this.draw(performance.now());
+    }
+  }
+  extras(ghost: CitySnapshot | null, flood: number, headline: string) {
+    this.ghost = ghost;
+    this.flood = clamp(flood, 0, 0.85);
+    this.headline = headline;
+  }
+  renderAt(now: number) {
+    this.draw(now);
   }
   async image(): Promise<Blob> {
     return new Promise((resolve, reject) =>
@@ -179,8 +261,8 @@ export class CityScene {
     );
   }
   private resize(): void {
-    const rect = this.canvas.getBoundingClientRect(),
-      dpr = Math.min(devicePixelRatio || 1, 2);
+    const rect = this.fixed ?? this.canvas.getBoundingClientRect(),
+      dpr = this.fixed ? 1 : Math.min(devicePixelRatio || 1, 2);
     this.width = rect.width;
     this.height = rect.height;
     this.canvas.width = Math.round(rect.width * dpr);
@@ -209,7 +291,18 @@ export class CityScene {
       .sort((a, b) => b.rssBytes - a.rssBytes)
       .slice(0, 110)) {
       if (this.positions.has(process.key)) continue;
-      let slot = hash(process.key) % 169;
+      const root = districtRoot(process, processes);
+      const zone = architectures[classify(root.name)].zone;
+      // Related processes settle near their observed application root; probing keeps slots unique.
+      const preferred = [...Array(169)]
+        .map((_, slot) => ({
+          slot,
+          distance:
+            Math.hypot((slot % 13) - zone[0], Math.floor(slot / 13) - zone[1]) +
+            (hash(root.key + ":" + slot) % 100) / 180,
+        }))
+        .sort((a, b) => a.distance - b.distance);
+      let slot = preferred[0].slot;
       for (let attempt = 0; attempt < 169; attempt++) {
         const x = slot % 13,
           y = Math.floor(slot / 13);
@@ -218,7 +311,7 @@ export class CityScene {
           occupied.add(slot);
           break;
         }
-        slot = (slot + 1) % 169;
+        slot = preferred[attempt + 1]?.slot ?? slot;
       }
     }
     // Only keep a bounded visual subset; all processes remain in the searchable list.
@@ -289,6 +382,18 @@ export class CityScene {
     void a;
   }
   private draw(now: number): void {
+    if (this.cameraTarget) {
+      const a = 0.13;
+      this.zoomValue += (this.cameraTarget.zoom - this.zoomValue) * a;
+      this.pan.x += (this.cameraTarget.x - this.pan.x) * a;
+      this.pan.y += (this.cameraTarget.y - this.pan.y) * a;
+      if (
+        Math.abs(this.cameraTarget.x - this.pan.x) +
+          Math.abs(this.cameraTarget.y - this.pan.y) <
+        0.15
+      )
+        this.cameraTarget = null;
+    }
     const c = this.ctx,
       t = this.theme;
     c.clearRect(0, 0, this.width, this.height);
@@ -304,6 +409,14 @@ export class CityScene {
     background.addColorStop(1, "#090d14");
     c.fillStyle = background;
     c.fillRect(0, 0, this.width, this.height);
+    for (let i = 0; i < 55; i++) {
+      const x = ((hash("star" + i) % 1000) / 1000) * this.width,
+        y = ((hash("sky" + i) % 350) / 1000) * this.height;
+      c.fillStyle = t.accent;
+      c.globalAlpha = 0.12 + (i % 4) * 0.05;
+      c.fillRect(x, y, 1, 1);
+    }
+    c.globalAlpha = 1;
     this.hits = [];
     this.iso(-0.65, -0.65, 13.4, 13.4, 0, {
       top: t.ground,
@@ -340,6 +453,28 @@ export class CityScene {
       });
     const scale =
       Math.min(this.width / 910, this.height / 650) * this.zoomValue;
+    if (this.ghost) {
+      c.save();
+      c.globalAlpha = 0.22;
+      c.setLineDash([3, 4]);
+      for (const p of this.ghost.processes.slice(0, 110)) {
+        const pos = this.positions.get(p.key) ?? {
+          x: hash(p.key) % 13,
+          y: Math.floor(hash(p.key) / 13) % 13,
+        };
+        const h = clamp(10 + Math.log2(p.rssBytes / 1048576 + 1) * 11, 12, 145);
+        this.iso(
+          pos.x,
+          pos.y,
+          0.65,
+          0.65,
+          h,
+          { top: "#68baff22", left: "#68baff08", right: "#68baff08" },
+          "#9ed4ff",
+        );
+      }
+      c.restore();
+    }
     // Streets represent observed parent-child relationships, never guessed grouping.
     if (this.options.roads) {
       for (const p of displayed) {
@@ -400,10 +535,36 @@ export class CityScene {
         selected = p.key === this.options.selected,
         dim = this.options.filter && !this.options.filter.has(p.key),
         mb = p.rssBytes / 1048576;
-      const height = clamp(10 + Math.log2(mb + 1) * 11, 12, 145),
+      const birth = this.born.get(p.key),
+        progress =
+          birth === undefined || this.reduced.matches
+            ? 1
+            : clamp((now - birth) / 1600, 0.03, 1);
+      const rise = 1 - Math.pow(1 - progress, 3);
+      const height = clamp(10 + Math.log2(mb + 1) * 11, 12, 145) * rise,
         size = clamp(0.38 + Math.log2(mb + 1) * 0.028, 0.4, 0.72),
         cpu = p.cpu ?? 0;
       const shade = selected ? t.accent : p.growing ? t.secondary : undefined;
+      const architecture = architectures[classify(p.name)];
+      c.globalAlpha = dim ? 0.08 : 0.2;
+      this.iso(pos.x - 0.09, pos.y - 0.09, 0.9, 0.9, 1, {
+        top: architecture.color,
+        left: t.left,
+        right: t.right,
+      });
+      if (progress < 1 && !dim) {
+        const ground = this.project(pos.x + 0.3, pos.y + 0.3);
+        c.save();
+        c.translate(ground.x, ground.y);
+        c.scale(1, 0.5);
+        c.strokeStyle = t.accent;
+        c.globalAlpha = 1 - progress;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.arc(0, 0, (16 + progress * 65) * scale, 0, Math.PI * 2);
+        c.stroke();
+        c.restore();
+      }
       c.globalAlpha = dim ? 0.15 : 1;
       if (t.shape === "tree") {
         this.iso(pos.x + 0.22, pos.y + 0.22, 0.13, 0.13, height * 0.55, {
@@ -469,9 +630,53 @@ export class CityScene {
           size,
           size,
           height,
-          { top: t.top, left: t.left, right: t.right },
+          { top: architecture.color, left: t.left, right: t.right },
           shade,
         );
+        if (architecture.shape === "terrace") {
+          for (let terrace = 1; terrace <= 3; terrace++) {
+            const a = this.project(pos.x + size, pos.y, (height * terrace) / 4),
+              b = this.project(
+                pos.x + size,
+                pos.y + size,
+                (height * terrace) / 4,
+              );
+            c.strokeStyle = architecture.color;
+            c.lineWidth = 2 * scale;
+            c.beginPath();
+            c.moveTo(a.x, a.y);
+            c.lineTo(b.x, b.y);
+            c.stroke();
+          }
+        } else if (
+          architecture.shape === "workshop" ||
+          architecture.shape === "studio"
+        ) {
+          this.iso(
+            pos.x + 0.12,
+            pos.y + 0.12,
+            size * 0.55,
+            size * 0.55,
+            height + 11 * rise,
+            { top: architecture.color, left: t.right, right: t.left },
+            shade,
+          );
+        } else if (
+          architecture.shape === "plant" ||
+          architecture.shape === "antenna" ||
+          architecture.shape === "utility"
+        ) {
+          const top = this.project(pos.x + size / 2, pos.y + size / 2, height);
+          c.strokeStyle = architecture.color;
+          c.lineWidth = (architecture.shape === "plant" ? 4 : 1.5) * scale;
+          c.beginPath();
+          c.moveTo(top.x, top.y);
+          c.lineTo(top.x, top.y - 18 * scale * rise);
+          c.stroke();
+          c.beginPath();
+          c.arc(top.x, top.y - 19 * scale * rise, 3 * scale, 0, Math.PI * 2);
+          c.stroke();
+        }
       }
       const floors = Math.max(2, Math.floor(height / 11));
       for (let floor = 1; floor < floors; floor++) {
@@ -550,10 +755,45 @@ export class CityScene {
       }
     }
     c.globalAlpha = 1;
+    for (const exit of this.departing) {
+      const elapsed = (now - exit.at) / 2200;
+      if (elapsed >= 1 || this.reduced.matches) continue;
+      c.globalAlpha = (1 - elapsed) * 0.7;
+      const point = this.project(exit.pos.x + 0.3, exit.pos.y + 0.3);
+      c.fillStyle = t.secondary;
+      for (let i = 0; i < 9; i++)
+        c.fillRect(
+          point.x + Math.sin(i * 7) * elapsed * 35 * scale,
+          point.y - elapsed * (20 + i * 10) * scale,
+          3 * scale,
+          3 * scale,
+        );
+    }
+    c.globalAlpha = 1;
     const growing = snapshot.processes.filter((p) => p.growing),
-      water = clamp(growing.reduce((n, p) => n + p.growthMB, 0) / 750, 0, 0.68);
+      water = Math.max(
+        this.flood,
+        clamp(growing.reduce((n, p) => n + p.growthMB, 0) / 750, 0, 0.68),
+      );
     if (water > 0) {
-      const y = this.height * (1 - water * 0.5);
+      const source = growing.sort((a, b) => b.growthMB - a.growthMB)[0];
+      const sourcePos = source ? this.positions.get(source.key) : undefined;
+      if (sourcePos) {
+        const point = this.project(sourcePos.x + 0.3, sourcePos.y + 0.3);
+        c.save();
+        c.translate(point.x, point.y);
+        c.scale(1, 0.5);
+        c.strokeStyle = t.water;
+        for (let i = 0; i < 3; i++) {
+          const phase = ((this.reduced.matches ? 0 : now / 2200) + i / 3) % 1;
+          c.globalAlpha = (1 - phase) * 0.7;
+          c.beginPath();
+          c.arc(0, 0, (20 + phase * water * 450) * scale, 0, Math.PI * 2);
+          c.stroke();
+        }
+        c.restore();
+      }
+      const y = this.height * (1 - water * 0.8);
       const gradient = c.createLinearGradient(0, y, 0, this.height);
       gradient.addColorStop(0, t.water + "00");
       gradient.addColorStop(0.22, t.water + "55");
@@ -577,6 +817,44 @@ export class CityScene {
       }
       c.globalAlpha = 1;
     }
+    if (this.headline) {
+      c.fillStyle = "#090f19d9";
+      c.fillRect(18, 58, Math.min(this.width - 36, 470), 36);
+      c.font = `13px ${this.options.locale === "fa" ? "Vazirmatn" : "Segoe UI"}, sans-serif`;
+      c.fillStyle = t.accent;
+      c.textAlign = this.options.locale === "fa" ? "right" : "left";
+      c.fillText(
+        this.headline.slice(0, 75),
+        this.options.locale === "fa" ? Math.min(this.width - 30, 476) : 30,
+        81,
+        Math.min(this.width - 60, 445),
+      );
+    }
+    const focused = snapshot.processes.find((p) => p.key === this.focusedKey);
+    if (focused && this.zoomValue > 1.8) {
+      const w = Math.min(360, this.width - 36),
+        top = this.height - 99;
+      c.fillStyle = "#0a1423ed";
+      c.fillRect(18, top, w, 57);
+      c.strokeStyle = architectures[classify(focused.name)].color;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(18, top);
+      c.lineTo(18 + w, top);
+      c.stroke();
+      c.textAlign = "left";
+      c.font = "bold 13px Vazirmatn, sans-serif";
+      c.fillStyle = "#e5edf3";
+      c.fillText("↗ " + focused.name.slice(0, 28), 29, top + 22, w - 22);
+      c.font = "11px Vazirmatn, sans-serif";
+      c.fillStyle = t.accent;
+      c.fillText(
+        `CPU ${focused.cpu?.toFixed(1) ?? "—"}%  /  RAM ${(focused.rssBytes / 1048576).toFixed(0)} MB  /  PID ${focused.pid}`,
+        29,
+        top + 43,
+        w - 22,
+      );
+    }
     c.fillStyle = "#7b93a6";
     c.font = `11px ${this.options.locale === "fa" ? "Vazirmatn" : "Segoe UI"}, sans-serif`;
     c.textAlign = "left";
@@ -584,7 +862,9 @@ export class CityScene {
       "PROCESS CITY  /  " +
         (this.options.mode === "demo" ? "SIMULATION" : "LIVE LOCAL") +
         "  /  " +
-        this.theme.name.toUpperCase(),
+        this.theme.name.toUpperCase() +
+        "  /  " +
+        new Date(snapshot.at).toLocaleTimeString("en-GB"),
       20,
       this.height - 20,
     );

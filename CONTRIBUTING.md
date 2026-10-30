@@ -16,4 +16,12 @@ Include fixtures and tests for CPU intervals, protected processes, PID reuse and
 
 A memory-growth warning is a heuristic, never a definitive leak diagnosis. Document threshold changes and expected false positives. Keep data buffers bounded.
 
+## Experiences, recordings and media
+
+Keep rescue actions confined to `DemoWorld`; the HTTP collector must remain read-only. Game clocks advance from accepted samples. Only persistent synthetic processes may be chosen as culprits, and victory must wait for memory recovery.
+
+Recording changes belong in `src/tape.ts`. Preserve schema/source validation, monotonic sample times, sample caps, and reconstruction of per-process history. An imported recording must remain labeled as replay; incoming live samples must not overwrite the selected frame. Test malformed and oversized inputs.
+
+Video export must preserve source and timestamps, correctly label its actual container, release capture tracks on success/cancellation, and avoid automatic uploads. Commit only synthetic screenshots, clips and fixtures. Architectural name hints must not replace observed parent-child links.
+
 Use an issue to describe a bug, including Windows/Node versions and what you expected. Share a minimal sanitized sample instead of full private process data.

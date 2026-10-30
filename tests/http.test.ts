@@ -56,6 +56,10 @@ test("read-only HTTP flow exposes health, preserves stale status, rejects foreig
     assert.equal(file.status, 200);
     assert.match(file.headers.get("content-type")!, /svg/);
     assert.equal(file.headers.get("x-content-type-options"), "nosniff");
+    assert.match(
+      file.headers.get("content-security-policy")!,
+      /media-src 'self' blob:/,
+    );
     assert.notEqual((await fetch(base + "/%2e%2e%5cpackage.json")).status, 200);
     assert.equal((await fetch(base + "/missing.txt")).status, 404);
   } finally {

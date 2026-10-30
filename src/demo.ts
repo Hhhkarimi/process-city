@@ -5,6 +5,8 @@ export class DemoWorld {
   tick = 0;
   surge = false;
   leak = false;
+  leakPid = 7331;
+  private launchNumber = 0;
   private leaked = 0;
   private cumulative = new Map<number, number>();
   private systemTotal = 0;
@@ -85,7 +87,7 @@ export class DemoWorld {
       const cumulative =
         (this.cumulative.get(base.pid) ?? 0) + (cpu / 100) * 8 * seconds;
       this.cumulative.set(base.pid, cumulative);
-      const extra = base.pid === 7331 ? this.leaked * MB : 0;
+      const extra = base.pid === this.leakPid ? this.leaked * MB : 0;
       const wave =
         (Math.sin(this.tick * 0.1 + i) - Math.sin(0.1 + i)) * MB * 1.3;
       return {
@@ -115,7 +117,13 @@ export class DemoWorld {
       capturedAt: new Date(at).toISOString(),
       cores: 8,
       totalBytes: 32 * 1024 * MB,
-      availableBytes: Math.max(0, (21 * 1024 - this.leaked) * MB),
+      availableBytes: Math.max(
+        0,
+        (21 * 1024 - this.leaked) * MB -
+          this.templates
+            .filter((p) => p.pid >= 16000)
+            .reduce((n, p) => n + p.privateBytes, 0),
+      ),
       systemCpu: { total: this.systemTotal, idle: this.systemIdle },
       processes,
     };
@@ -123,5 +131,29 @@ export class DemoWorld {
   recover(): void {
     this.surge = false;
     this.leak = false;
+  }
+  startLeak(pid = 7331): void {
+    this.leaked = 0;
+    this.leakPid = pid;
+    this.leak = true;
+  }
+  baselinePrivate(pid: number): number {
+    return this.templates.find((p) => p.pid === pid)?.privateBytes ?? 0;
+  }
+  launch(now = Date.now()): number {
+    // A synthetic process family, never an actual OS launch.
+    const root = 16000 + (++this.launchNumber % 5) * 20;
+    this.templates = this.templates.filter((p) => p.pid < 16000);
+    for (let i = 0; i < 8; i++)
+      this.templates.push({
+        pid: root + i,
+        ppid: i === 0 ? 1100 : root,
+        name: i === 0 ? "Studio-Code.exe" : "Code-renderer.exe",
+        createdAt: new Date(now + i).toISOString(),
+        cpuSeconds: 0,
+        rssBytes: (180 + i * 37) * MB,
+        privateBytes: (130 + i * 29) * MB,
+      });
+    return root;
   }
 }
