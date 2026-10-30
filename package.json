@@ -1,6 +1,6 @@
 {
   "name": "process-city",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "private": true,
   "type": "module",
   "description": "Your computer, a living city. Local-first Windows process observatory.",

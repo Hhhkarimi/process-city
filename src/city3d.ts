@@ -4,6 +4,7 @@ import type { CityProcess, CitySnapshot, Theme } from "./model.ts";
 import type { CityOptions } from "./city2d.ts";
 import { architectures, classify } from "./districts.ts";
 import { CityLayout, hash, type Plot } from "./layout.ts";
+import { pickBuilding } from "./picking.ts";
 import {
   processRelations,
   relationColors,
@@ -358,12 +359,13 @@ export class WebGLCityScene {
             ),
             this.camera,
           );
-          const hit = this.ray.intersectObject(this.bodies)[0];
-          const p =
-            hit?.instanceId === undefined
-              ? null
-              : this.buildings[hit.instanceId];
-          if (p) this.select(p.process.key);
+          const key = pickBuilding(
+            this.ray,
+            this.bodies,
+            this.roofs,
+            this.buildings.map((b) => b.process.key),
+          );
+          if (key) this.select(key);
         }
         this.down = null;
       },
@@ -521,6 +523,7 @@ export class WebGLCityScene {
           born: old.get(key)?.born ?? (firstSnapshot ? now - 2000 : now),
           roof: new THREE.Group(),
         };
+        building.roof.userData.processKey = process.key;
         this.addRoof(building);
         this.roofs.add(building.roof);
         return building;
