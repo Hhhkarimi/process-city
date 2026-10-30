@@ -11,6 +11,13 @@ import { CityAnalyzer, sortProcesses } from "./metrics.ts";
 import { DemoWorld } from "./demo.ts";
 import { themes } from "./themes.ts";
 import { CityScene } from "./city.ts";
+import { shellMarkup } from "./shell.ts";
+import {
+  applicationInsights,
+  busiestApplication,
+  type InsightMetric,
+} from "./insights.ts";
+import type { ApplicationInsight } from "./insights.ts";
 import { Experience } from "./experience.ts";
 import { architectures, classify } from "./districts.ts";
 
@@ -69,6 +76,7 @@ const size = (bytes: number): string =>
 const theme = () => themes.find((t) => t.id === themeId)!;
 function icon(name: string): string {
   const shapes: Record<string, string> = {
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
     city: '<path d="M3 21V9l6-3v15M9 21V3l6 3v15M15 21V11l6-3v13M1 21h22M5 11v2m0 3v2m6-10v2m0 3v2m6-2v2m0 3v2"/>',
     cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v5m6-5v5M9 18v5m6-5v5M1 9h5m-5 6h5m12-6h5m-5 6h5"/>',
     ram: '<path d="M3 6h18v12H3zM6 18v3m4-3v3m4-3v3m4-3v3M7 10v4m5-4v4m5-4v4"/>',
@@ -101,6 +109,13 @@ function savePreferences(): void {
     /* Preferences are optional. */
   }
 }
+let inspectorOpen = false,
+  insightOpen = false,
+  insightMetric: InsightMetric = "cpu";
+let insightKey: string | null = null;
+let quality: "auto" | "low" | "high" = "auto";
+let introChecked = false,
+  introTimer: ReturnType<typeof setTimeout> | undefined;
 let liveSnapshot: CitySnapshot | null = null;
 const experience = new Experience({
   fa: () => fa,
@@ -126,6 +141,91 @@ const experience = new Experience({
     analyzer = new CityAnalyzer();
   },
 });
+function activateToolTab(panel: string): void {
+  const active = ["processes", "experiences", "recording", "settings"].includes(
+    panel,
+  )
+    ? panel
+    : "processes";
+  for (const name of ["processes", "experiences", "recording", "settings"]) {
+    const tab = document.getElementById("tab-" + name),
+      content = document.getElementById("panel-" + name);
+    tab?.setAttribute("aria-selected", String(name === active));
+    tab?.setAttribute("tabindex", name === active ? "0" : "-1");
+    if (content) content.hidden = name !== active;
+  }
+  if (active === "processes") renderPanels(true);
+}
+function openTools(panel: string): void {
+  activateToolTab(panel);
+  const dialog = document.querySelector<HTMLDialogElement>("#tools-dialog");
+  if (dialog && !dialog.open) dialog.showModal();
+}
+function renderInsight(insight: ApplicationInsight | null): void {
+  const focusedAction = document.activeElement?.closest<HTMLElement>(
+    "#insight-content [data-action]",
+  )?.dataset.action;
+  document
+    .querySelector('[data-action="insight-cpu"]')
+    ?.setAttribute("aria-pressed", String(insightMetric === "cpu"));
+  document
+    .querySelector('[data-action="insight-memory"]')
+    ?.setAttribute("aria-pressed", String(insightMetric === "memory"));
+  document
+    .querySelector('[data-action="discover"]')
+    ?.setAttribute("aria-pressed", String(insightOpen));
+  const content = document.getElementById("insight-content");
+  if (!content) return;
+  if (!insight) {
+    content.innerHTML = `<p>${insightKey ? t("The selected family is no longer in this snapshot.", "خانوادهٔ انتخاب‌شده دیگر در این نمونه نیست.") : t("Waiting for the next CPU reading. You can explore private memory now.", "در انتظار نمونهٔ بعدی CPU؛ حافظهٔ خصوصی را همین حالا می‌توانی بررسی کنی.")}</p><button data-action="refresh-insight" class="text-button">${t("Find the current leader", "پیداکردن پرمصرف‌ترینِ اکنون")} ↻</button>`;
+    return;
+  }
+  const cpu =
+    insight.cpu === null
+      ? "—"
+      : (insight.cpuComplete ? "" : "≥ ") + percent(insight.cpu);
+  content.innerHTML = `<span class="insight-reason">${insightMetric === "cpu" ? t("Tracking the family found at selection", "رصد خانوادهٔ پرمصرف در لحظهٔ انتخاب") : t("Tracking the selected private-memory family", "رصد خانوادهٔ انتخاب‌شده از نظر حافظهٔ خصوصی")}</span><h2 dir="ltr">${esc(insight.name)}</h2><div class="insight-values"><span><small>CPU</small><strong><bdi>${cpu}</bdi></strong></span><span><small>${t("Private memory", "حافظهٔ خصوصی")}</small><strong><bdi>${size(insight.privateBytes)}</bdi></strong></span><span><small>${t("Processes", "پردازش")}</small><strong>${num(insight.members.size)}</strong></span></div><p>${t("This observed process family is highlighted in the city. High usage can be normal.", "این خانوادهٔ پردازش‌ها در شهر روشن شده است. مصرف بالا می‌تواند طبیعی باشد.")}${!insight.cpuComplete ? " " + t("Some CPU counters are unavailable.", "برخی شمارنده‌های CPU در دسترس نیستند.") : ""}</p><button data-action="refresh-insight" class="text-button">${t("Find the current leader", "پیداکردن پرمصرف‌ترینِ اکنون")} ↻</button><button data-action="inspect-family" class="text-button">${t("Inspect this family", "بررسی این خانواده")} ↗</button>`;
+  if (focusedAction)
+    Array.from(content.querySelectorAll<HTMLButtonElement>("[data-action]"))
+      .find((button) => button.dataset.action === focusedAction)
+      ?.focus({ preventScroll: true });
+}
+function finishIntro(): void {
+  clearTimeout(introTimer);
+  const overlay = document.getElementById("intro-scene");
+  if (overlay) overlay.hidden = true;
+  scene?.stopIntro();
+  try {
+    localStorage.setItem("process-city-intro-v3", "seen");
+  } catch {
+    /* Optional onboarding memory. */
+  }
+}
+function startIntro(force: boolean): void {
+  if (!snapshot || !scene) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  try {
+    if (!force && localStorage.getItem("process-city-intro-v3") === "seen")
+      return;
+  } catch {
+    /* First-visit animation stays optional. */
+  }
+  const overlay = document.getElementById("intro-scene"),
+    rows = document.getElementById("intro-rows");
+  if (!overlay || !rows) return;
+  rows.innerHTML = [...snapshot.processes]
+    .sort((a, b) => b.rssBytes - a.rssBytes)
+    .slice(0, 5)
+    .map(
+      (p, i) =>
+        `<div class="intro-row" style="--order:${i}"><span dir="ltr">${esc(p.name)}</span><span><bdi>${size(p.rssBytes)}</bdi></span></div>`,
+    )
+    .join("");
+  overlay.hidden = false;
+  scene.intro();
+  clearTimeout(introTimer);
+  introTimer = setTimeout(finishIntro, 3300);
+}
 function renderShell(): void {
   const view = scene?.view();
   scene?.destroy();
@@ -135,39 +235,37 @@ function renderShell(): void {
     "Process City — Your computer, a living city.",
     "شهر پردازش‌ها — کامپیوترت یک شهر زنده است.",
   );
-  app.innerHTML = `<a class="skip" href="#process-list">${t("Skip to process list", "رفتن به فهرست پردازش‌ها")}</a>
-  <header class="topbar"><a href="?lang=${fa ? "fa" : "en"}" class="brand"><span class="brand-mark">${icon("city")}</span><span>PROCESS<span class="brand-city">CITY</span></span></a><span class="platform-tag">WINDOWS / LOCAL FIRST</span><div class="top-actions"><button data-action="help" class="quiet">${icon("info")}${t("How it works", "راهنما")}</button><button data-action="language" class="quiet" aria-label="${fa ? "Switch to English" : "تغییر زبان به فارسی"}">${fa ? "English" : "فارسی"}</button><button data-action="screenshot" class="outline">${icon("camera")}${t("Capture city", "عکس از شهر")}</button></div></header>
-  <main><section class="page-heading"><div><div class="heading-kicker">${t("THE PROCESS OBSERVATORY", "رصدخانهٔ پردازش‌ها")}</div><h1>${t("Your system. A new perspective.", "سیستم تو، از نگاهی تازه.")}</h1><p>${t("Every process a building. Every connection a street.", "هر پردازش یک ساختمان؛ هر رابطه یک خیابان.")}</p></div><div class="source-control"><label for="mode">${t("DATA SOURCE", "منبع داده")}</label><select id="mode"><option value="demo" ${mode === "demo" ? "selected" : ""}>${t("Demo simulation", "شبیه‌سازی دمو")}</option><option value="live" ${mode === "live" ? "selected" : ""}>${t("Live Windows", "ویندوز زنده")}</option></select><span id="connection-status"></span></div></section>
-  <section class="stats" aria-label="${t("System metrics", "شاخص‌های سیستم")}"><div class="stat">${icon("cpu")}<div><span>${t("CPU activity", "فعالیت CPU")}</span><strong id="cpu-value">—</strong><small>${t("of total machine capacity", "از کل ظرفیت سیستم")}</small></div><div class="stat-bars" id="cpu-bars"></div></div><div class="stat">${icon("ram")}<div><span>${t("Physical memory", "حافظهٔ فیزیکی")}</span><strong id="memory-value">—</strong><small id="memory-detail"></small></div><div class="memory-meter"><i id="memory-fill"></i></div></div><div class="stat">${icon("city")}<div><span>${t("City population", "جمعیت شهر")}</span><strong id="process-value">—</strong><small id="process-detail"></small></div></div><button class="stat growth-stat" data-action="growth-filter">${icon("drop")}<div><span>${t("Growing memory", "رشد حافظه")}</span><strong id="growth-value">—</strong><small>${t("a signal, not a leak diagnosis", "یک نشانه؛ نه تشخیص قطعی نشت")}</small></div></button></section>
-  <div id="connection-banner" class="connection-banner" role="status" hidden></div>
-  <section id="experience-tools" class="experience-tools" aria-label="${t("Cinematic controls", "کنترل‌های سینمایی")}"></section><section class="workspace"><div class="city-column"><div class="city-toolbar"><div class="city-title"><span class="status-dot"></span><strong>${t("City view", "نمای شهر")}</strong><span id="source-badge" class="badge"></span></div><div class="city-controls"><label class="sr-only" for="theme">${t("City theme", "تم شهر")}</label><select id="theme">${themes.map((th) => `<option value="${th.id}" ${th.id === themeId ? "selected" : ""}>${fa ? th.fa : th.name}</option>`).join("")}</select><button data-action="pause" class="icon-button" aria-label="${paused ? t("Resume updates", "ادامهٔ به‌روزرسانی") : t("Pause updates", "توقف به‌روزرسانی")}">${icon(paused ? "play" : "pause")}</button></div></div>
-  <div class="city-stage"><canvas id="city" tabindex="0" role="img" aria-label="${t("Interactive isometric process city. Select a building or use the process list. Drag to pan; plus and minus to zoom.", "شهر ایزومتریک پردازش‌ها. یک ساختمان یا پردازش را از فهرست انتخاب کنید. برای جابه‌جایی بکشید و برای بزرگ‌نمایی از مثبت و منفی استفاده کنید.")}"></canvas><div class="city-caption"><span class="caption-coordinate">${t("SYSTEM DISTRICT", "ناحیهٔ سیستم")}</span><span>${t("Working set → skyline", "حافظهٔ مقیم ← خط آسمان")}</span></div><div class="view-tools"><button data-action="zoom-in" aria-label="${t("Zoom in", "بزرگ‌نمایی")}">${icon("plus")}</button><button data-action="zoom-out" aria-label="${t("Zoom out", "کوچک‌نمایی")}">${icon("minus")}</button><button data-action="fit" aria-label="${t("Fit city", "نمای کامل شهر")}">${icon("fit")}</button><span></span><button data-action="labels" aria-pressed="${labels}" aria-label="${t("Toggle building labels", "نمایش نام ساختمان‌ها")}">Aa</button><button data-action="roads" aria-pressed="${roads}" aria-label="${t("Toggle parent-child streets", "نمایش خیابان‌های والد و فرزند")}">${icon("link")}</button></div></div>
-  <div class="city-legend"><span><i class="legend-building"></i>${t("Height & volume = RAM", "ارتفاع و حجم = RAM")}</span><span><i class="legend-lights"></i>${t("Lit windows = CPU", "پنجره‌های روشن = CPU")}</span><span><i class="legend-street"></i>${t("Streets = parent / child", "خیابان‌ها = والد / فرزند")}</span></div>
-  <section class="sandbox" aria-label="${t("Demo scenarios", "سناریوهای دمو")}"><div><span class="sandbox-label">${t("THE SANDBOX", "محیط آزمایش")}</span><strong>${t("Make a little chaos.", "کمی آشوب بساز.")}</strong><small>${t("Synthetic scenarios. No actual CPU or RAM is allocated.", "سناریوی ساختگی؛ CPU یا RAM واقعی مصرف نمی‌شود.")}</small></div><div class="sandbox-actions"><button data-action="surge" ${mode === "live" ? "disabled" : ""} aria-pressed="${demo.surge}">${icon("cpu")}${t("CPU surge", "موج CPU")}</button><button data-action="leak" ${mode === "live" ? "disabled" : ""} aria-pressed="${demo.leak}">${icon("drop")}${t("Memory leak", "نشت حافظه")}</button><button data-action="recover" ${mode === "live" ? "disabled" : ""} aria-label="${t("Recover city", "بازیابی شهر")}">${icon("reset")}</button></div></section>
-  </div><aside id="inspector" class="inspector" aria-label="${t("Process inspector", "جزئیات پردازش")}"></aside></section>
-  <section id="experience" class="experience"></section><section class="process-section"><div class="process-heading"><div><h2>${t("Behind the skyline", "پشت خط آسمان")}</h2><p>${t("The full process list. The city shows up to 110 buildings.", "فهرست کامل پردازش‌ها؛ شهر تا ۱۱۰ ساختمان را نمایش می‌دهد.")}</p></div><div class="list-controls"><label class="search">${icon("search")}<input id="search" type="search" maxlength="80" placeholder="${t("Find a process or PID…", "نام پردازش یا PID…")}" aria-label="${t("Search processes", "جست‌وجوی پردازش‌ها")}" value="${esc(query)}"></label><select id="sort" aria-label="${t("Sort processes", "مرتب‌سازی پردازش‌ها")}"><option value="ram" ${sort === "ram" ? "selected" : ""}>${t("Memory ↓", "حافظه ↓")}</option><option value="cpu" ${sort === "cpu" ? "selected" : ""}>${t("CPU ↓", "CPU ↓")}</option><option value="name" ${sort === "name" ? "selected" : ""}>${t("Name A–Z", "نام A–Z")}</option></select></div></div><div id="filter-state"></div><div id="process-list" class="process-list"></div></section>
-  <section class="event-section"><h2>${t("City dispatch", "رویدادهای شهر")}</h2><div id="events"></div></section><footer class="footer"><span>PROCESS CITY <span class="version">v2.0</span> · ${t("A different way to see your machine.", "نگاهی متفاوت به کامپیوترت.")}</span><span>${t("Read-only. No telemetry. No cloud process uploads.", "فقط‌خواندنی؛ بدون تله‌متری و ارسال پردازش‌ها به ابر.")}</span><button data-action="help" class="text-button">${t("Guide & export", "راهنما و خروجی")}</button></footer></main>
-  <dialog id="help-dialog"><div class="dialog-heading"><h2>${t("A little map to your city.", "نقشه‌ای کوچک برای شهر تو.")}</h2><button data-action="close-help" aria-label="${t("Close help", "بستن راهنما")}">${icon("close")}</button></div><div class="help-content"><h3>${t("Read the skyline", "خواندن خط آسمان")}</h3><p>${t("Building volume represents working-set RAM on a logarithmic scale. CPU activity lights more windows. Streets follow parent process IDs observed in the same snapshot. The process list contains every collected process.", "حجم ساختمان با حافظهٔ مقیم پردازش در مقیاس لگاریتمی مرتبط است. فعالیت CPU پنجره‌های بیشتری را روشن می‌کند. خیابان‌ها از شناسهٔ والد در همان نمونه پیروی می‌کنند. فهرست، همهٔ پردازش‌های جمع‌آوری‌شده را نشان می‌دهد.")}</p><h3>${t("Why the city floods", "چرا شهر زیر آب می‌رود؟")}</h3><p>${t("Water indicates sustained growth in private memory: at least 16 MB and 15% growth over at least 12 seconds, with 70% of intervals increasing. This is a heuristic, not proof of a memory leak. The demo leak grows memory-lab.exe by 24 MB per update.", "آب نشانهٔ رشد پیوستهٔ حافظهٔ خصوصی است: حداقل ۱۶ مگابایت و ۱۵٪ رشد در دست‌کم ۱۲ ثانیه، با افزایش در ۷۰٪ فاصله‌های نمونه‌برداری. این یک تخمین است، نه اثبات نشت حافظه. سناریوی دمو در هر به‌روزرسانی ۲۴ مگابایت به memory-lab.exe می‌افزاید.")}</p><h3>${t("See your real Windows processes", "دیدن پردازش‌های واقعی ویندوز")}</h3><p>${t("Run this project locally with Node.js 22.18+ or 24+. Then open the loopback URL and select Live Windows. The hosted demo cannot read your computer.", "پروژه را با Node.js نسخهٔ ۲۲٫۱۸ به بالا یا ۲۴ به بالا روی ویندوز اجرا کنید. سپس نشانی محلی را باز و «ویندوز زنده» را انتخاب کنید. دموی آنلاین به پردازش‌های کامپیوتر شما دسترسی ندارد.")}</p><pre><code>npm ci\nnpm run build\nnpm start\n\nhttp://127.0.0.1:4317</code></pre><p>${t("If Windows blocks launching a child collector, use the documented two-terminal mode. Protected processes may expose no CPU counter. CPU percentages use total machine capacity; the first sample needs a second reading.", "اگر ویندوز اجرای جمع‌آورنده را محدود کرد، از روش دو ترمینال در راهنما استفاده کنید. شمارندهٔ CPU برخی پردازش‌های محافظت‌شده در دسترس نیست. درصد CPU از کل ظرفیت سیستم است و محاسبهٔ آن به دو نمونه نیاز دارد.")}</p><h3>${t("Keyboard & camera", "صفحه‌کلید و دوربین")}</h3><p>${t("Select processes from the list with Tab and Enter. Focus the canvas, then use arrows to pan, +/− to zoom and 0 to reset. Capture city downloads a PNG of the canvas. Snapshots are downloaded only when you choose Export snapshot.", "با Tab و Enter از فهرست پردازش انتخاب کنید. در بوم، کلیدهای جهت برای جابه‌جایی، مثبت و منفی برای بزرگ‌نمایی و صفر برای بازنشانی است. عکس شهر، تصویر PNG بوم را دریافت می‌کند. داده‌ها فقط با انتخاب خروجی نمونه دریافت می‌شوند.")}</p><button data-action="export-json">${icon("download")}${t("Export current snapshot", "دریافت نمونهٔ فعلی")}</button></div></dialog><div id="toast" role="status" class="toast" hidden></div>`;
+  app.innerHTML = shellMarkup({
+    fa,
+    mode,
+    themeId,
+    labels,
+    roads,
+    paused,
+    query,
+    sort,
+    icon,
+    esc,
+  });
   try {
     scene = new CityScene(
       document.querySelector<HTMLCanvasElement>("#city")!,
       theme(),
       (key) => {
+        experience.stopDirector();
         selected = key;
-        renderPanels();
-        if (innerWidth < 900)
-          document.querySelector("#inspector")?.scrollIntoView({
-            behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
-              ? "instant"
-              : "smooth",
-            block: "nearest",
-          });
+        inspectorOpen = true;
+        insightOpen = false;
+        renderPanels(true);
       },
     );
   } catch (e) {
     notify(e instanceof Error ? e.message : "Canvas unavailable.");
   }
   if (view) scene?.restore(view);
+  scene?.quality(quality);
+  const qualitySelect = document.getElementById("quality") as HTMLSelectElement;
+  if (qualitySelect) qualitySelect.value = quality;
   experience.mount();
   renderPanels();
 }
@@ -197,12 +295,12 @@ function sparkline(process: CityProcess): string {
         `${10 + (i / Math.max(values.length - 1, 1)) * 260},${66 - ((v - min) / range) * 48}`,
     )
     .join(" ");
-  return `<svg class="sparkline" viewBox="0 0 280 80" role="img" aria-label="${t("Private memory history, up to 60 seconds", "تاریخچهٔ حافظهٔ خصوصی تا ۶۰ ثانیه")}"><path d="M10 67H270M10 30H270" class="chart-grid"/><polyline points="${points}" class="chart-line"/></svg>`;
+  return `<svg class="sparkline" viewBox="0 0 280 80" role="img" aria-label="${t("Private memory history, up to 30 samples", "تاریخچهٔ حافظهٔ خصوصی تا ۳۰ نمونه")}"><path d="M10 67H270M10 30H270" class="chart-grid"/><polyline points="${points}" class="chart-line"/></svg>`;
 }
 function inspectorMarkup(): string {
   const p = snapshot?.processes.find((p) => p.key === selected);
   if (!p)
-    return `<div class="inspector-header">${icon("search")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span></div><div class="inspector-empty">${icon("city")}<h2>${t("Meet a building.", "با یک ساختمان آشنا شو.")}</h2><p>${t("Select any building or process in the list to follow its story.", "یک ساختمان یا پردازش از فهرست انتخاب کنید تا جزئیاتش را ببینید.")}</p></div>`;
+    return `<div class="inspector-header">${icon("search")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span></div><div class="inspector-empty">${icon("city")}<h2>${selected ? t("This process has left the city.", "این پردازش از شهر خارج شده است.") : t("Meet a building.", "با یک ساختمان آشنا شو.")}</h2><p>${t("Select any building or process in the list to follow its story.", "یک ساختمان یا پردازش از فهرست انتخاب کنید تا جزئیاتش را ببینید.")}</p></div>`;
   const parent = snapshot!.processes.find((v) => v.key === p.parentKey),
     children = snapshot!.processes.filter((v) => v.parentKey === p.key);
   return `<div class="inspector-header">${icon("cpu")}<span>${t("PROCESS INSPECTOR", "جزئیات پردازش")}</span><span class="inspector-live">${experience.replaying ? t("REPLAY", "بازپخش") : paused ? t("PAUSED", "متوقف") : t("TRACKING", "در حال رصد")}</span></div><div class="inspector-content"><div class="process-avatar">${icon("city")}</div><h2 dir="ltr">${esc(p.name)}</h2><div class="architecture-badge">${fa ? architectures[classify(p.name)].fa : architectures[classify(p.name)].en}</div><button data-exp="enter" class="enter-building">↗ ${t("Enter this building", "ورود به این ساختمان")}</button><div class="pid-line">PID <bdi>${p.pid}</bdi> <span>·</span> PPID <bdi>${p.ppid}</bdi></div><div class="inspector-metrics"><div><span>${t("CPU SHARE", "سهم CPU")}</span><strong>${percent(p.cpu)}</strong></div><div><span>${t("WORKING SET", "حافظهٔ مقیم")}</span><strong><bdi>${size(p.rssBytes)}</bdi></strong></div></div><div class="inspector-separator"></div><div class="history-heading"><h3>${t("Private memory", "حافظهٔ خصوصی")}</h3><span>${num(p.history.length)} ${t("samples", "نمونه")}</span></div><div class="history-value"><bdi>${size(p.privateBytes)}</bdi><span class="${p.growing ? "warning-text" : ""}">${p.growthMB >= 0 ? "+" : "−"}${num(Math.abs(p.growthMB), 1)} MB</span></div>${sparkline(p)}<div class="chart-axis"><span>${t("Earlier", "قبل‌تر")}</span><span>${t("Now", "اکنون")}</span></div>
@@ -218,6 +316,13 @@ function inspectorMarkup(): string {
     )}${children.length > 6 ? `<button class="text-button" data-action="children">${t("Show all children in list", "نمایش همهٔ فرزندان در فهرست")}</button>` : ""}<div class="process-age">${t("Started", "زمان آغاز")}: ${p.createdAt ? esc(new Date(p.createdAt).toLocaleTimeString(fa ? "fa-IR" : "en-GB")) : t("Unavailable", "نامشخص")}</div></div>`;
 }
 function renderPanels(force = false): void {
+  document
+    .querySelector('[data-action="discover"]')
+    ?.setAttribute("aria-pressed", String(insightOpen));
+  const discoverButton = document.querySelector<HTMLButtonElement>(
+    '[data-action="discover"]',
+  );
+  if (discoverButton) discoverButton.disabled = !snapshot;
   if (!snapshot) {
     const banner = document.querySelector<HTMLElement>("#connection-banner");
     if (banner) {
@@ -287,6 +392,11 @@ function renderPanels(force = false): void {
   banner.hidden = !connectionError;
   banner.textContent = connectionError;
   const values = filtered();
+  const searchInput = document.getElementById(
+    "search",
+  ) as HTMLInputElement | null;
+  if (searchInput && document.activeElement !== searchInput)
+    searchInput.value = query;
   byId("filter-state").innerHTML =
     filter === "growth" || parentFilter
       ? `<button class="filter-chip" data-action="clear-filter">${parentFilter ? t("Child processes only", "فقط پردازش‌های فرزند") : t("Growing memory only", "فقط رشد حافظه")}${icon("close")}</button>`
@@ -294,7 +404,11 @@ function renderPanels(force = false): void {
   const focusedProcess = document.activeElement?.closest<HTMLButtonElement>(
     "#process-list [data-process]",
   )?.dataset.process;
-  {
+  if (
+    force ||
+    (document.querySelector<HTMLDialogElement>("#tools-dialog")?.open &&
+      !document.getElementById("panel-processes")?.hidden)
+  ) {
     byId("process-list").innerHTML = values.length
       ? `<table><thead><tr><th>${t("PROCESS", "پردازش")}</th><th>PID</th><th>CPU</th><th>${t("WORKING SET", "حافظهٔ مقیم")}</th><th>${t("PRIVATE", "خصوصی")}</th><th>${t("GROWTH", "رشد")}</th></tr></thead><tbody>${values.map((p) => `<tr class="${p.key === selected ? "selected" : ""}"><td><button data-process="${esc(p.key)}"><span class="process-dot ${p.growing ? "growing" : ""}"></span><span dir="ltr">${esc(p.name)}</span></button></td><td><bdi>${p.pid}</bdi></td><td>${percent(p.cpu)}</td><td><bdi>${size(p.rssBytes)}</bdi></td><td><bdi>${size(p.privateBytes)}</bdi></td><td class="${p.growing ? "warning-text" : ""}">${p.growing ? "↗ " + num(p.growthMB, 1) + " MB" : "—"}</td></tr>`).join("")}</tbody></table>`
       : `<div class="list-empty">${t("No matching processes. Try another name or clear the growth filter.", "پردازشی پیدا نشد. نام دیگری را جست‌وجو کنید یا فیلتر رشد را بردارید.")}</div>`;
@@ -307,8 +421,46 @@ function renderPanels(force = false): void {
     )
       .find((button) => button.dataset.process === focusedProcess)
       ?.focus({ preventScroll: true });
-  if (force || !document.activeElement?.closest("#inspector"))
-    byId("inspector").innerHTML = inspectorMarkup();
+  const focusedInspector =
+    document.activeElement?.closest<HTMLButtonElement>("#inspector button");
+  const focusIdentity = focusedInspector
+    ? {
+        action: focusedInspector.dataset.action,
+        process: focusedInspector.dataset.process,
+        exp: focusedInspector.dataset.exp,
+      }
+    : null;
+  if (force || inspectorOpen)
+    byId("inspector").innerHTML =
+      `<button class="inspector-close icon-button" data-action="close-inspector" aria-label="${t("Close inspector", "بستن جزئیات")}">×</button>` +
+      inspectorMarkup();
+  if (focusIdentity)
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>("#inspector button"),
+    )
+      .find(
+        (button) =>
+          button.dataset.action === focusIdentity.action &&
+          button.dataset.process === focusIdentity.process &&
+          button.dataset.exp === focusIdentity.exp,
+      )
+      ?.focus({ preventScroll: true });
+  byId("inspector").hidden = !inspectorOpen;
+  byId("insight").hidden = !insightOpen;
+  const discovery = insightOpen
+    ? insightKey
+      ? (applicationInsights(snapshot).find(
+          (group) => group.key === insightKey,
+        ) ?? null)
+      : busiestApplication(snapshot, insightMetric)
+    : null;
+  if (discovery) {
+    insightKey = discovery.key;
+    if (insightOpen) selected = discovery.key;
+  }
+  if (insightOpen) renderInsight(discovery);
+  byId("renderer-state").textContent =
+    scene?.kind === "3d" ? "3D" : t("2D fallback", "نمای جایگزین ۲بعدی");
   byId("events").innerHTML = snapshot.events.length
     ? snapshot.events
         .slice(0, 8)
@@ -318,14 +470,22 @@ function renderPanels(force = false): void {
         )
         .join("")
     : `<p class="muted-note">${t("Watching for process starts, exits and memory growth…", "در انتظار آغاز، پایان یا رشد حافظهٔ پردازش‌ها…")}</p>`;
+  document
+    .querySelector('[data-action="surge"]')
+    ?.setAttribute("aria-pressed", String(demo.surge));
+  document
+    .querySelector('[data-action="leak"]')
+    ?.setAttribute("aria-pressed", String(demo.leak));
   experience.update(snapshot);
   scene?.set(snapshot, theme(), {
     labels,
     roads,
     paused: paused || stale,
-    selected,
-    filter:
-      query || parentFilter || filter === "growth"
+    selected:
+      inspectorOpen || insightOpen || experience.cinematic ? selected : null,
+    filter: discovery
+      ? discovery.members
+      : query || parentFilter || filter === "growth"
         ? new Set(values.map((p) => p.key))
         : null,
     locale: fa ? "fa" : "en",
@@ -340,11 +500,11 @@ function accept(raw: RawSnapshot): void {
   experience.record(liveSnapshot);
   snapshot = experience.display(liveSnapshot);
   lastReceive = Date.now();
-  if (!selected)
-    selected =
-      [...snapshot.processes].sort((a, b) => b.rssBytes - a.rssBytes)[0]?.key ??
-      null;
   renderPanels();
+  if (!introChecked) {
+    introChecked = true;
+    startIntro(false);
+  }
 }
 async function poll(): Promise<void> {
   if (paused || inFlight) return;
@@ -387,6 +547,9 @@ async function changeMode(value: string): Promise<void> {
     snapshot = null;
     liveSnapshot = null;
     experience.reset(mode);
+    inspectorOpen = false;
+    insightOpen = false;
+    insightKey = null;
     selected = null;
     lastTimestamp = "";
     connectionError = "";
@@ -452,15 +615,122 @@ app.addEventListener("click", async (event) => {
   const target = (event.target as Element).closest<HTMLElement>("button");
   if (!target) return;
   if (target.dataset.process) {
+    experience.stopDirector();
     selected = target.dataset.process;
+    inspectorOpen = true;
+    insightOpen = false;
+    document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
     renderPanels(true);
-    const row = Array.from(
-      document.querySelectorAll<HTMLButtonElement>("#process-list button"),
-    ).find((button) => button.dataset.process === selected);
-    row?.focus({ preventScroll: true });
+    document
+      .querySelector<HTMLButtonElement>(".inspector-close")
+      ?.focus({ preventScroll: true });
+    if (innerWidth < 700)
+      document.querySelector(".city-observatory")?.scrollIntoView({
+        behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+        block: "start",
+      });
     return;
   }
+  if (target.dataset.exp === "tour") {
+    inspectorOpen = false;
+    insightOpen = false;
+    renderPanels();
+  }
+  if (["now", "rescue", "showcase"].includes(target.dataset.exp ?? "")) {
+    inspectorOpen = false;
+    insightOpen = false;
+    insightKey = null;
+    if (target.dataset.exp === "rescue") selected = null;
+  }
   switch (target.dataset.action) {
+    case "open-tools":
+      openTools("processes");
+      break;
+    case "open-processes":
+      openTools("processes");
+      break;
+    case "open-share":
+      openTools("recording");
+      break;
+    case "close-tools":
+      document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
+      break;
+    case "tool-tab":
+      activateToolTab(target.dataset.panel ?? "processes");
+      break;
+    case "discover":
+      experience.stopDirector();
+      insightOpen = !insightOpen;
+      insightKey = null;
+      inspectorOpen = false;
+      query = "";
+      filter = "all";
+      parentFilter = null;
+      renderPanels(true);
+      if (insightOpen) {
+        const insight = snapshot
+          ? busiestApplication(snapshot, insightMetric)
+          : null;
+        if (insight) scene?.focus(insight.key);
+      } else scene?.reset();
+      break;
+    case "close-insight":
+      insightOpen = false;
+      scene?.reset();
+      renderPanels();
+      break;
+    case "insight-cpu":
+      insightMetric = "cpu";
+      insightKey = null;
+      renderPanels();
+      if (insightKey) scene?.focus(insightKey);
+      break;
+    case "insight-memory":
+      insightMetric = "memory";
+      insightKey = null;
+      renderPanels();
+      if (insightKey) scene?.focus(insightKey);
+      break;
+    case "refresh-insight":
+      insightKey = null;
+      renderPanels();
+      if (insightKey) scene?.focus(insightKey);
+      break;
+    case "inspect-family": {
+      const insight = snapshot
+        ? applicationInsights(snapshot).find(
+            (group) => group.key === insightKey,
+          )
+        : null;
+      if (insight) {
+        selected = insight.key;
+        insightOpen = false;
+        inspectorOpen = true;
+        renderPanels(true);
+      }
+      break;
+    }
+    case "close-inspector":
+      inspectorOpen = false;
+      renderPanels();
+      break;
+    case "play-story":
+      inspectorOpen = false;
+      insightOpen = false;
+      query = "";
+      parentFilter = null;
+      filter = "all";
+      void experience.action("showcase");
+      break;
+    case "replay-intro":
+      document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
+      startIntro(true);
+      break;
+    case "skip-intro":
+      finishIntro();
+      break;
     case "language":
       fa = !fa;
       savePreferences();
@@ -479,7 +749,14 @@ app.addEventListener("click", async (event) => {
       break;
     case "pause":
       paused = !paused;
-      renderShell();
+      target.innerHTML = icon(paused ? "play" : "pause");
+      target.setAttribute(
+        "aria-label",
+        paused
+          ? t("Resume updates", "ادامهٔ به‌روزرسانی")
+          : t("Pause updates", "توقف به‌روزرسانی"),
+      );
+      renderPanels();
       if (!paused) void poll();
       break;
     case "zoom-in":
@@ -508,7 +785,7 @@ app.addEventListener("click", async (event) => {
         !experience.scenarioLocked
       ) {
         demo.surge = !demo.surge;
-        renderShell();
+        renderPanels();
         void poll();
       }
       break;
@@ -522,7 +799,7 @@ app.addEventListener("click", async (event) => {
         else demo.startLeak();
         selected =
           snapshot?.processes.find((p) => p.pid === 7331)?.key ?? selected;
-        renderShell();
+        renderPanels();
         void poll();
       }
       break;
@@ -533,7 +810,7 @@ app.addEventListener("click", async (event) => {
         !experience.scenarioLocked
       ) {
         demo.recover();
-        renderShell();
+        renderPanels();
         void poll();
       }
       break;
@@ -547,6 +824,7 @@ app.addEventListener("click", async (event) => {
       renderPanels(true);
       break;
     case "children":
+      openTools("processes");
       parentFilter = selected;
       filter = "all";
       query = "";
@@ -614,8 +892,47 @@ app.addEventListener("change", (event) => {
     renderPanels();
   }
   if (target.id === "mode") void changeMode(target.value);
+  if (
+    target.id === "quality" &&
+    ["auto", "low", "high"].includes(target.value)
+  ) {
+    quality = target.value as typeof quality;
+    scene?.quality(quality);
+  }
   if (target.id === "sort") {
     sort = target.value as "ram" | "cpu" | "name";
+    renderPanels();
+  }
+});
+app.addEventListener("pointerdown", (event) => {
+  if ((event.target as HTMLElement).id === "city") experience.stopDirector();
+});
+app.addEventListener("city-camera-input", () => experience.stopDirector());
+app.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement;
+  if (target.id === "city") experience.stopDirector();
+  if (
+    target.getAttribute("role") === "tab" &&
+    ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+  ) {
+    event.preventDefault();
+    const tabs = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('.tool-tabs [role="tab"]'),
+    );
+    const index = tabs.indexOf(target as HTMLButtonElement),
+      step = event.key === "ArrowRight" ? (fa ? -1 : 1) : fa ? 1 : -1;
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : (index + step + tabs.length) % tabs.length;
+    activateToolTab(tabs[next].dataset.panel!);
+    tabs[next].focus();
+  }
+  if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+    inspectorOpen = false;
+    insightOpen = false;
     renderPanels();
   }
 });

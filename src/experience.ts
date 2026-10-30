@@ -6,6 +6,7 @@ import { CityTape, compareFrames, MAX_TAPE_BYTES } from "./tape.ts";
 import { RescueGame } from "./rescue.ts";
 import { renderClip, videoMime } from "./video.ts";
 import { makeShowcase } from "./showcase.ts";
+import { mountExperience } from "./experience-shell.ts";
 
 interface Context {
   fa(): boolean;
@@ -38,7 +39,9 @@ export class Experience {
   private speed = 4;
   private baseline: CitySnapshot | null = null;
   private ghost = false;
-  private follow = true;
+  private follow = false;
+  private compareMix = 0.5;
+  private comparePaint = 0;
   private touring = false;
   private tourAt = 0;
   private lastFocus = 0;
@@ -59,6 +62,8 @@ export class Experience {
     });
     document.addEventListener("input", (event) => {
       const input = event.target as HTMLInputElement;
+      if (input.id === "compare-slider")
+        this.setComparison(Number(input.value) / 100);
       if (input.id === "time-slider") {
         this.enterReplay();
         this.playing = false;
@@ -84,6 +89,16 @@ export class Experience {
   source() {
     return this.replayTape?.source ?? this.c.mode();
   }
+  get cinematic() {
+    return this.touring || this.follow;
+  }
+  stopDirector() {
+    this.follow = false;
+    this.touring = false;
+    document
+      .querySelector('[data-exp="tour"]')
+      ?.setAttribute("aria-pressed", "false");
+  }
   get replaying() {
     return this.replayTape !== null;
   }
@@ -102,7 +117,7 @@ export class Experience {
     this.playing = false;
     this.previous = null;
     this.game.reset();
-    this.touring = false;
+    this.stopDirector();
     this.caption = "";
     this.lastFocus = 0;
   }
@@ -155,23 +170,29 @@ export class Experience {
       : frame;
   }
   mount() {
-    const tools = document.getElementById("experience-tools"),
-      host = document.getElementById("experience");
-    if (!tools || !host) return;
-    tools.innerHTML = `<div class="director-intro"><span class="eyebrow">${this.t("THE CITY IS ALIVE", "شهر زنده است")}</span><strong>${this.t("Give your computer a story.", "بگذار کامپیوترت قصه بگوید.")}</strong></div><div class="director-buttons"><button data-exp="launch" ${this.c.mode() === "live" ? "disabled" : ""}>＋ ${this.t("Launch a demo app", "تولد یک برنامهٔ دمو")}</button><button data-exp="follow" aria-pressed="${this.follow}">${this.t("Auto director", "کارگردان خودکار")}</button><button data-exp="tour" aria-pressed="${this.touring}">◈ ${this.t("City tour", "گردش در شهر")}</button><button data-exp="enter">↗ ${this.t("Enter building", "ورود به ساختمان")}</button><button data-exp="timeline">↶ ${this.t("Time machine", "ماشین زمان")}</button><button data-exp="orbit">${this.t("City overview", "نمای کل شهر")}</button></div>`;
-    host.innerHTML = `<div class="time-machine"><div class="experience-heading"><div><span class="eyebrow">01 / ${this.t("TIME MACHINE", "ماشین زمان")}</span><h2>${this.t("Every skyline has a past.", "هر خط آسمان، گذشته‌ای دارد.")}</h2></div><span id="time-state" class="badge"></span></div><div class="time-scrubber"><button data-exp="play" id="play-tape" aria-label="${this.t("Play recording", "پخش ضبط")}">▶</button><label class="timeline-label"><span id="time-label"></span><input id="time-slider" type="range" min="0" max="0" value="0" aria-label="${this.t("Recording timeline", "خط زمان ضبط")}"></label><select id="play-speed" aria-label="${this.t("Playback speed", "سرعت پخش")}"><option value="1">1×</option><option value="4" selected>4×</option><option value="12">12×</option></select><button data-exp="now">${this.t("Back to now", "بازگشت به اکنون")}</button></div><div class="time-actions"><button data-exp="showcase">▶ ${this.t("Play a 60s demo story", "نمایش داستان ۶۰ ثانیه‌ای دمو")}</button><button data-exp="pin">${this.t("Pin comparison frame", "ثبت مرجع مقایسه")}</button><button data-exp="ghost" aria-pressed="${this.ghost}">${this.t("Ghost skyline", "شبح شهر قبلی")}</button><button data-exp="save">↓ ${this.t("Save recording", "ذخیرهٔ ضبط")}</button><button data-exp="import">↑ ${this.t("Open recording", "بازکردن ضبط")}</button><input id="tape-file" type="file" accept=".json,application/json" hidden><span id="comparison"></span></div><p class="experience-note" id="tape-note"></p></div>
-    <div class="experience-grid"><article class="rescue-card"><div class="experience-heading"><div><span class="eyebrow">02 / ${this.t("SAVE THE CITY", "شهر را نجات بده")}</span><h2>${this.t("Something is leaking.", "یک جای شهر نشتی دارد.")}</h2></div><span id="rescue-clock" class="rescue-clock">00:45</span></div><p>${this.t("Find the growing process before the flood reaches the skyline. Watch private memory, inspect buildings, then contain your suspect.", "پیش از غرق‌شدن شهر، پردازش در حال رشد را پیدا کن. حافظهٔ خصوصی و ساختمان‌ها را بررسی کن و مظنونت را مهار کن.")}</p><div class="flood-meter" role="meter" aria-label="${this.t("Simulated flood level", "سطح سیل شبیه‌سازی‌شده")}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="flood-fill"></i></div><p id="rescue-story" role="status"></p><div class="rescue-actions"><button data-exp="rescue" class="primary">${this.t("Start rescue · 45s", "شروع نجات · ۴۵ ثانیه")}</button><button data-exp="contain">${this.t("Contain selected process", "مهار پردازش انتخاب‌شده")}</button><button data-exp="cancel-rescue">${this.t("Reset challenge", "بازنشانی چالش")}</button></div><small>${this.t("Simulation only. No OS process is stopped. Game time pauses with incoming samples.", "فقط شبیه‌سازی؛ هیچ پردازش واقعی متوقف نمی‌شود. زمان بازی با توقف نمونه‌برداری متوقف می‌شود.")}</small></article>
-    <article class="share-card"><span class="eyebrow">03 / ${this.t("MAKE IT A MOMENT", "این لحظه را ماندگار کن")}</span><h2>${this.t("Your last minute. In 12 seconds.", "یک دقیقهٔ تو، در ۱۲ ثانیه.")}</h2><div class="clip-art" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><b>12s</b></div><p>${this.t("Turn the recorded city into a local video. Source, timestamps and system metrics travel with the image.", "از شهر ضبط‌شده یک ویدئو بساز. منبع داده، زمان و شاخص‌های سیستم روی تصویر می‌مانند.")}</p><div class="clip-buttons"><button data-exp="clip" class="primary">◉ ${this.t("Create cinematic clip", "ساخت کلیپ سینمایی")}</button><label><input id="portrait-clip" type="checkbox"> ${this.t("Portrait", "عمودی")}</label></div><small>${this.t("MP4 when supported; otherwise WebM. Process recordings stay in this browser until you download them.", "در صورت پشتیبانی MP4؛ در غیر این صورت WebM. ضبط پردازش‌ها تا زمان دریافت، در همین مرورگر می‌ماند.")}</small></article></div>
-    <div class="architecture-guide"><span>${this.t("ARCHITECTURAL DNA", "هویت معماری")}</span>${Object.values(
-      architectures,
-    )
-      .map(
-        (a) =>
-          `<span><i style="--district:${a.color}"></i>${this.c.fa() ? a.fa : a.en}</span>`,
-      )
-      .join(
-        "",
-      )}<small>${this.t("Styles inferred from names. Streets follow observed parent IDs.", "سبک‌ها از نام حدس زده می‌شوند؛ خیابان‌ها از والدِ مشاهده‌شده پیروی می‌کنند.")}</small></div>`;
+    mountExperience({
+      fa: this.c.fa(),
+      live: this.c.mode() === "live",
+      touring: this.touring,
+      ghost: this.ghost,
+    });
+    const handle = document.getElementById("compare-handle");
+    let dragging = false;
+    handle?.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle?.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const rect = document.getElementById("city")!.getBoundingClientRect();
+      this.setComparison((event.clientX - rect.left) / rect.width);
+    });
+    handle?.addEventListener("pointerup", () => {
+      dragging = false;
+    });
+    handle?.addEventListener("pointercancel", () => {
+      dragging = false;
+    });
     let dialog = document.getElementById("clip-dialog");
     if (!dialog) {
       dialog = document.createElement("dialog");
@@ -185,6 +206,24 @@ export class Experience {
     this.update(
       this.replaying ? this.activeTape.frame(this.index) : this.c.latest(),
     );
+  }
+  private setComparison(value: number): void {
+    this.stopDirector();
+    this.compareMix = Math.max(0, Math.min(1, value));
+    const input = document.getElementById(
+      "compare-slider",
+    ) as HTMLInputElement | null;
+    if (input) input.value = String(this.compareMix * 100);
+    const line = document.getElementById("comparison-line");
+    if (line) line.style.left = `${this.compareMix * 100}%`;
+    this.c
+      .scene()
+      ?.comparison(this.ghost ? this.baseline : null, this.compareMix);
+    if (!this.comparePaint)
+      this.comparePaint = requestAnimationFrame(() => {
+        this.comparePaint = 0;
+        this.c.scene()?.renderAt(performance.now());
+      });
   }
   update(frame: CitySnapshot | null) {
     if (!frame) return;
@@ -248,6 +287,42 @@ export class Experience {
         ),
       );
     const phase = this.game.phase;
+    const rescueOverlay = document.getElementById("rescue-overlay");
+    if (rescueOverlay) rescueOverlay.hidden = phase === "idle";
+    const line = document.getElementById("comparison-line"),
+      timeTrack = document.getElementById("time-track"),
+      compareTrack = document.getElementById("comparison-track");
+    if (line) {
+      line.hidden = !this.ghost;
+      line.style.left = `${this.compareMix * 100}%`;
+    }
+    if (timeTrack) timeTrack.hidden = this.ghost;
+    if (compareTrack) compareTrack.hidden = !this.ghost;
+    document
+      .querySelector('[data-exp="compare"]')
+      ?.setAttribute("aria-pressed", String(this.ghost));
+    if (this.baseline) {
+      text(
+        "comparison",
+        `${this.t("Reference", "مرجع")}: ${new Date(this.baseline.at).toLocaleTimeString(this.c.fa() ? "fa-IR" : "en-GB")} · ${document.getElementById("comparison")?.textContent ?? ""}`,
+      );
+      const before = document.querySelector(".before-label"),
+        after = document.querySelector(".after-label");
+      if (before)
+        before.textContent =
+          this.t("REFERENCE ", "مرجع ") +
+          new Date(this.baseline.at).toLocaleTimeString(
+            this.c.fa() ? "fa-IR" : "en-GB",
+          );
+      if (after)
+        after.textContent =
+          (this.replaying
+            ? this.t("SELECTED ", "انتخاب‌شده ")
+            : this.t("NOW ", "اکنون ")) +
+          new Date(frame.at).toLocaleTimeString(
+            this.c.fa() ? "fa-IR" : "en-GB",
+          );
+    }
     text(
       "rescue-clock",
       `00:${String(Math.max(0, Math.ceil(45 - this.game.elapsed))).padStart(2, "0")}`,
@@ -285,6 +360,10 @@ export class Experience {
         String(Math.round(this.game.water * 100)),
       );
     const disabled = this.c.mode() !== "demo" || this.replaying;
+    const compareButton = document.querySelector<HTMLButtonElement>(
+      '[data-exp="compare"]',
+    );
+    if (compareButton) compareButton.disabled = this.scenarioLocked;
     for (const action of ["surge", "leak", "recover"])
       document
         .querySelectorAll<HTMLButtonElement>(`[data-action="${action}"]`)
@@ -297,6 +376,11 @@ export class Experience {
             (b.disabled =
               disabled || (action !== "cancel-rescue" && this.scenarioLocked)),
         );
+    const rescueButton = document.querySelector<HTMLButtonElement>(
+      '[data-exp="rescue"]',
+    );
+    if (rescueButton)
+      rescueButton.disabled = this.c.mode() !== "demo" || this.scenarioLocked;
     const contain = document.querySelector<HTMLButtonElement>(
       '[data-exp="contain"]',
     );
@@ -318,6 +402,17 @@ export class Experience {
                 "بازپخش / در حافظهٔ شهر قدم بزن",
               )
             : "";
+    const captionElement = document.getElementById("scene-caption");
+    if (captionElement)
+      captionElement.textContent =
+        caption ||
+        this.t(
+          "Drag to explore · select a building",
+          "برای کاوش بکش؛ یک ساختمان را انتخاب کن",
+        );
+    this.c
+      .scene()
+      ?.comparison(this.ghost ? this.baseline : null, this.compareMix);
     this.c
       .scene()
       ?.extras(
@@ -331,7 +426,7 @@ export class Experience {
       this.replayTape = new CityTape(this.tape.source);
       this.tape.frames.forEach((f) => this.replayTape!.record(f));
     }
-    this.touring = false;
+    this.stopDirector();
   }
   private showFrame() {
     this.c.display(this.activeTape.frame(this.index));
@@ -402,6 +497,7 @@ export class Experience {
           ),
         );
       const tape = CityTape.parse(await file.text());
+      this.stopDirector();
       if (this.c.mode() === "demo") this.c.demo().recover();
       this.game.reset();
       this.replayTape = tape;
@@ -418,8 +514,8 @@ export class Experience {
       this.c.notify(this.importError);
     }
   }
-  private async action(action: string) {
-    const frame = this.replaying
+  async action(action: string) {
+    let frame = this.replaying
       ? this.activeTape.frame(this.index)
       : this.c.latest();
     switch (action) {
@@ -447,7 +543,7 @@ export class Experience {
         if (this.c.selected()) this.c.scene()?.focus(this.c.selected()!);
         break;
       case "orbit":
-        this.touring = false;
+        this.stopDirector();
         this.c.scene()?.reset();
         document
           .querySelector('[data-exp="tour"]')
@@ -455,6 +551,8 @@ export class Experience {
         break;
       case "tour":
         this.touring = !this.touring;
+        this.follow = this.touring;
+        document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
         if (this.touring) this.nextBuilding();
         document
           .querySelector('[data-exp="tour"]')
@@ -472,9 +570,12 @@ export class Experience {
         this.replayTape = null;
         this.playing = false;
         this.importError = "";
+        this.ghost = false;
+        this.baseline = null;
         this.c.display(null);
         break;
       case "showcase":
+        this.stopDirector();
         this.game.reset();
         if (this.c.mode() === "demo") this.c.demo().recover();
         this.replayTape = makeShowcase();
@@ -486,7 +587,27 @@ export class Experience {
         this.c.scene()?.reset();
         this.showFrame();
         break;
+      case "compare":
+        this.stopDirector();
+        if (!this.ghost && !this.baseline) {
+          const tape = this.activeTape,
+            end = this.replaying ? this.index : tape.frames.length - 1;
+          if (end < 1) {
+            this.c.notify(
+              this.t(
+                "Record at least two samples first.",
+                "ابتدا دست‌کم دو نمونه ضبط کن.",
+              ),
+            );
+            return;
+          }
+          this.baseline = structuredClone(tape.frame(Math.max(0, end - 15)));
+        }
+        this.ghost = !this.ghost;
+        this.c.display(this.replaying ? frame : null);
+        break;
       case "pin":
+        this.stopDirector();
         if (frame) {
           this.baseline = structuredClone(frame);
           this.ghost = true;
@@ -519,7 +640,14 @@ export class Experience {
         document.getElementById("tape-file")?.click();
         break;
       case "rescue": {
-        if (this.c.mode() !== "demo" || this.replaying || !frame) return;
+        if (this.c.mode() !== "demo") return;
+        if (this.replaying) {
+          this.replayTape = null;
+          this.playing = false;
+          frame = this.c.latest();
+          this.c.display(null);
+        }
+        if (!frame) return;
         const candidates = frame.processes.filter(
           (p) =>
             p.pid > 1100 &&
@@ -530,13 +658,16 @@ export class Experience {
         const culprit =
           candidates[Math.floor(Math.random() * candidates.length)];
         if (!culprit) return;
+        this.ghost = false;
+        this.baseline = null;
+        document.querySelector<HTMLDialogElement>("#tools-dialog")?.close();
         this.game.start(culprit.key, frame.at);
         this.rescueBaseline = this.c.demo().baselinePrivate(culprit.pid);
         this.c.demo().recover();
         this.c.demo().startLeak(culprit.pid);
         this.c.restartAnalysis();
         this.c.scene()?.reset();
-        this.touring = false;
+        this.stopDirector();
         this.c.notify(
           this.t(
             "A hidden process is growing. Compare its private memory over several samples.",
@@ -642,6 +773,10 @@ export class Experience {
       target.innerHTML = `<video controls playsinline aria-label="${this.t("City clip preview", "پیش‌نمایش کلیپ شهر")}"></video><a class="clip-download" download="process-city-${frozen.source}.${result.extension}">${this.t("Download", "دریافت")} ${result.extension.toUpperCase()} · ${(result.blob.size / 1048576).toFixed(1)} MB</a>`;
       target.querySelector("video")!.src = this.clipURL;
       target.querySelector("a")!.href = this.clipURL;
+      dialog.querySelector("h2")!.textContent = this.t(
+        "Your city clip is ready",
+        "کلیپ شهر تو آماده است",
+      );
       document.getElementById("clip-status")!.textContent = this.t(
         "Your clip is ready.",
         "کلیپ تو آماده است.",

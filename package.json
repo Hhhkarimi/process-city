@@ -1,6 +1,6 @@
 {
   "name": "process-city",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "description": "Your computer, a living city. Local-first Windows process observatory.",
@@ -14,10 +14,14 @@
   },
   "devDependencies": {
     "@types/node": "24.10.1",
+    "@types/three": "0.186.0",
     "typescript": "5.9.3",
-    "vite": "8.2.2"
+    "vite": "8.3.5"
   },
   "engines": {
     "node": ">=22.18.0"
+  },
+  "dependencies": {
+    "three": "0.187.0"
   }
 }

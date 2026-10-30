@@ -5,7 +5,7 @@ Process City keeps its collector local and read-only. Contributions should prese
 ## Add a city theme
 
 1. Add a unique `Theme` entry to `src/themes.ts`, with English/Persian names, readable colors and one supported geometry (`building`, `tree`, `station`, `reef`).
-2. A new geometry belongs in `src/city.ts`; preserve hit testing and process identity.
+2. A new geometry belongs in `src/city3d.ts` and its fallback in `src/city2d.ts`; preserve hit testing and process identity.
 3. Include a screenshot in demo mode. Do not commit snapshots of private live processes.
 4. Check desktop and narrow screens, reduced-motion mode and keyboard selection through the process list.
 5. Run `npm test` and `npm run build`.
@@ -25,3 +25,7 @@ Recording changes belong in `src/tape.ts`. Preserve schema/source validation, mo
 Video export must preserve source and timestamps, correctly label its actual container, release capture tracks on success/cancellation, and avoid automatic uploads. Commit only synthetic screenshots, clips and fixtures. Architectural name hints must not replace observed parent-child links.
 
 Use an issue to describe a bug, including Windows/Node versions and what you expected. Share a minimal sanitized sample instead of full private process data.
+
+## Quiet UI and rendering
+
+Keep the purpose visible above the city and new specialist controls inside the Tools dialog. Inspectors open on selection. Do not reintroduce permanent dashboard-card stacks. Preserve manual camera ownership, reduced-motion behavior, adaptive quality and the Canvas fallback. Dispose geometries, materials, textures, render targets, instanced buffers and listeners when replacing a world. Keep private live screenshots out of the repository. See `docs/DESIGN.md`.

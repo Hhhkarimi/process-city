@@ -2,24 +2,24 @@
 
 **Your computer, a living city.**
 
-An interactive Windows process observatory. Every process becomes a building, working-set memory shapes the skyline, CPU activity lights the windows, and parent-child relationships become streets.
+A visual Windows process monitor and learning tool. Find resource-heavy application families, inspect their process relationships, and replay how CPU and memory changed — inside a living 3D city.
 
 [Try the simulation](https://process-city-hhhkarimi.vercel.app) · [دموی فارسی](https://process-city-hhhkarimi.vercel.app/?lang=fa) · [راهنمای فارسی](README.fa.md)
 
 ![Process City observatory](docs/screenshots/desktop.png)
 
-## The v2 experience
+## The v3 experience
 
-**Launch → investigate → rewind → share.** A process monitor with a visible story, using Canvas 2D rather than a game-engine dependency.
+The city owns the screen. Its purpose is stated above it; detailed controls open only when requested.
 
-1. **Districts awaken.** App families settle together using observed parent identity. New buildings rise from the ground, streets light up, and exited processes dissolve. The optional auto director follows meaningful births, with a cooldown. Try **Launch a demo app**, or open a real application in Live Windows.
-2. **Save the city.** A 45-second simulation chooses a persistent process as a hidden memory-growth source and begins a fresh observation window. Inspect private-memory trends and contain your suspect. Wrong guesses cost time; correct containment drains the flood and waits for memory recovery before declaring victory. Pausing sampling pauses the game. No real process is stopped.
-3. **Time machine.** Scrub a rolling in-memory recording, replay at 1×/4×/12×, pin a baseline, and overlay its ghost skyline. Compare process births, exits and physical RAM. Save or import versioned JSON recordings. The buffer holds at most 90 frames and 25,000 process samples; imports are limited to 12 MB. A **60-second demo story** is available immediately.
-4. **Cinematic inspection.** Enter a selected building with a smooth 2.5D camera move, tour the twelve largest buildings, or return to the city overview. Reduced-motion preferences make moves immediate. This is an isometric close-up, not a first-person interior simulation.
-5. **Architectural DNA.** Browser residences, editor workshops, compute foundries, design studios, broadcast towers and system infrastructure have distinctive accents and rooftops. Styles are inferred from executable names; neighborhoods and streets use observed ancestry, not a claim about verified app identity.
-6. **Share the last minute.** Render up to the last 60 recorded seconds into a roughly 12-second local video, in landscape or portrait. The preview includes a download link. MP4 is used when the browser supports its encoder; WebM is the fallback. Source, sample timestamp, CPU and RAM remain visible in the clip. Rendering needs a visible tab for about 12 seconds; no process recording is uploaded.
+- **A real 3D city:** perspective, manual orbit/pan/zoom, soft shadows, restrained floor reflections and four architectural worlds. An adaptive quality mode reduces rendering cost on slower machines. A Canvas 2D fallback is used when WebGL is unavailable; append `?renderer=2d` to test it.
+- **A first-visit reveal:** measured process rows fade into a rising city. It lasts about three seconds, is skippable, remembers completion locally, and respects reduced-motion preferences. Replay it from Tools → Settings.
+- **Find the resource-heavy family:** the main action ranks observed parent-child families by available CPU or summed private memory, highlights the selected family and explains the reading. Inspection stays pinned as its numbers update; finding the current leader again is explicit. Missing CPU counters stay unknown; partial sums are marked as lower bounds. High usage is not a fault diagnosis.
+- **Before / now:** drag the split boundary to compare a reference frame with the displayed city using the same camera. Buildings, CPU lights and growth water reflect each frame's own data. The dock also scrubs and replays the rolling buffer at 1×/4×/12×. The generated 60-second demo story is available immediately.
+- **Optional experiences:** Tools → Experiences contains the 45-second, simulation-only flood-rescue challenge and synthetic CPU/memory scenarios. Select and inspect the culprit, contain it, and watch water and memory recover. No real process is terminated.
+- **Capture a moment:** Tools → Capture & replay creates a local landscape/portrait video, roughly 12 seconds from up to the last recorded minute, or a source-marked PNG. MP4 is used when supported, with WebM fallback. Versioned JSON recordings can also be saved and opened. Keep the tab visible while rendering a clip.
 
-Persian and English are included throughout, with a bundled **Vazirmatn** font. The four community-friendly themes remain available. [Watch a generated demo clip](docs/process-city-demo.mp4).
+**A quiet default:** the inspector opens only after a selection. Process tables, themes, scenarios and export settings live in a keyboard-accessible Tools dialog. Automatic camera moves are opt-in; manual interaction returns control to the user. Persian and English use a bundled Vazirmatn font. [Design and interaction contract](docs/DESIGN.md).
 
 ## Two modes, honestly labeled
 
@@ -76,17 +76,17 @@ The development server opens at `http://127.0.0.1:5174`. Its `/api` proxy connec
 
 ## Explore the city
 
-- Click a building or a process row to inspect CPU, working set, private memory history, parent and children.
+- Click a building or choose a row in Tools → Processes to open its inspector. Close it to return to the full city.
 - Search by process name or PID. Sort by memory, CPU or name. Filter processes with sustained private-memory growth.
-- Pan by dragging; use +/− to zoom and Fit to reset. With the canvas focused, arrows pan, +/− zoom and 0 resets the camera.
+- In 3D, drag to orbit, Shift-drag to pan, +/− to zoom and 0/Escape to reset. Arrow keys orbit a focused canvas. The 2D fallback uses drag/arrow panning.
 - Toggle process labels and parent-child streets. The searchable process list includes all collected processes; the map is limited to 110 buildings for predictable rendering cost.
 - Pause freezes sampling and animation; resume reads the current counters again.
-- Capture city downloads a PNG with an explicit simulation/live watermark. Export current snapshot is available in **How it works**.
+- Capture & replay contains the source-marked PNG, video, recording and raw-snapshot exports.
 - Persian and English UI, bundled Vazirmatn font, reduced-motion support and an accessible process list alongside the visual canvas.
 
 ## Make a little chaos
 
-In **Demo simulation**, enable **CPU surge** to load the synthetic Node district. Enable **Memory leak** to grow `memory-lab.exe` by 24 MB per update. Its building expands; a growth signal eventually raises floodwater. **Recover city** stops the scenarios and gradually releases synthetic leaked memory.
+In **Simulation**, open Tools → Experiences and enable **CPU surge** to load the synthetic Node district. Enable **Memory leak** to grow `memory-lab.exe` by 24 MB per update. Its building expands; a growth signal eventually raises floodwater. **Recover city** stops the scenarios and gradually releases synthetic leaked memory.
 
 ### What the water actually means
 
@@ -111,7 +111,12 @@ Add a typed `Theme` entry to `src/themes.ts`. Geometry variants are implemented 
 - `server/http.ts`: loopback-only HTTP service and static application; explicit Host and Origin validation; no cross-origin data sharing; no write or process-termination endpoints.
 - `src/model.ts`: validated raw snapshot schema.
 - `src/metrics.ts`: CPU deltas, process identity, memory growth, bounded histories and events.
-- `src/city.ts`: dependency-free Canvas 2D isometric renderer, stable process slots, hit testing and camera controls; at most 20 animation frames per second, suspended while the page is hidden.
+- `src/city.ts`: common renderer contract, WebGL fallback and source-marked PNG capture.
+- `src/city3d.ts`: bounded Three.js city, instanced bodies/windows, ray selection, camera, split comparison and adaptive quality.
+- `src/city2d.ts`: retained Canvas renderer and split comparison fallback.
+- `src/layout.ts`: stable, bounded application-neighborhood plots.
+- `src/insights.ts`: observed process-family aggregation and honest unknown/partial CPU handling.
+- `src/shell.ts` / `src/experience-shell.ts`: quiet bilingual shell, contextual inspector, Tools dialog and time dock.
 - `src/main.ts`: bilingual UI, collection lifecycle and explicit source states.
 - `src/districts.ts`: executable-name styles and cycle-safe application ancestry.
 - `src/tape.ts`: bounded recording, validated JSON import and frame comparison.
@@ -131,7 +136,7 @@ npm test
 npm run build
 ```
 
-The test suite covers CPU normalization, PID reuse, parent identity, memory-growth thresholds, noisy histories, bounded events, collector payload validation, simulation behavior and HTTP origin/path/method boundaries. GitHub Actions runs the same tests and build on Linux; actual collection is additionally tested on Windows.
+The 30-test suite covers family discovery, partial CPU readings, stable/bounded 3D layouts, CPU normalization, PID reuse, parent identity, memory-growth thresholds, noisy histories, bounded events, collector payload validation, simulation behavior and HTTP origin/path/method boundaries. GitHub Actions runs the same tests and build on Linux; actual collection is additionally tested on Windows.
 
 Optional **real** bounded workloads for checking your local monitor (never launched by the UI):
 
@@ -148,8 +153,8 @@ Import this repository into Vercel using the **Vite** preset: build `npm run bui
 
 ## Scope
 
-Version 2 is a read-only Windows monitor and browser simulation. It includes a bounded local replay buffer and explicit recording/video downloads; it has no remote-device monitoring, autostart service, installer or persistent historical database. Reloading clears the in-memory recording unless you saved it. Exports may contain process names. No telemetry or analytics is included. The monitoring app and PowerShell collector themselves consume some resources, which are included in live readings.
+Version 3 is a read-only Windows monitor and browser simulation. It includes a bounded local replay buffer and explicit recording/video downloads; it has no remote-device monitoring, autostart service, installer or persistent historical database. Reloading clears the in-memory recording unless you saved it. Exports may contain process names. No telemetry or analytics is included. The monitoring app and PowerShell collector themselves consume some resources, which are included in live readings.
 
 ## License
 
-Application: [MIT](LICENSE). The bundled [Vazirmatn](https://github.com/rastikerdar/vazirmatn) variable font is by Saber Rastikerdar and contributors and is distributed under [SIL OFL](public/fonts/OFL-Vazirmatn.txt).
+Application: [MIT](LICENSE). The Three.js renderer is covered by its [MIT notice](public/licenses/three-MIT.txt). The bundled [Vazirmatn](https://github.com/rastikerdar/vazirmatn) variable font is by Saber Rastikerdar and contributors and is distributed under [SIL OFL](public/fonts/OFL-Vazirmatn.txt).

@@ -44,7 +44,12 @@ export async function renderClip(
   const canvas = document.createElement("canvas");
   const width = portrait ? 720 : 1280,
     height = portrait ? 960 : 800;
-  const scene = new CityScene(canvas, theme, () => {}, { width, height });
+  canvas.width = width;
+  canvas.height = height;
+  const sceneCanvas = document.createElement("canvas");
+  const scene = new CityScene(sceneCanvas, theme, () => {}, { width, height });
+  scene.quality("low");
+  const clipView = scene.view();
   const context = canvas.getContext("2d")!;
   const stream = canvas.captureStream(30);
   const recorder = new MediaRecorder(stream, {
@@ -98,9 +103,8 @@ export async function renderClip(
       while (index + 1 < frames.length && frames[index + 1].at <= at) index++;
       const frame = frames[index];
       scene.restore({
-        zoom: 1 + Math.sin(fraction * Math.PI) * 0.12,
-        x: 0,
-        y: 0,
+        ...clipView,
+        zoom: clipView.zoom * (1 + Math.sin(fraction * Math.PI) * 0.12),
       });
       if (rendered !== index) {
         scene.set(frame, theme, {
@@ -115,6 +119,7 @@ export async function renderClip(
         rendered = index;
       }
       scene.renderAt(performance.now());
+      context.drawImage(scene.surface(), 0, 0, width, height);
       context.fillStyle = "#080e19ed";
       context.fillRect(0, 0, width, 55);
       context.fillRect(0, height - 72, width, 72);
